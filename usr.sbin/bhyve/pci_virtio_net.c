@@ -147,7 +147,6 @@ struct pci_vtnet_softc {
 	struct virtio_net_config vsc_config;
 
 	pthread_mutex_t	rx_mtx;
-	int		rx_in_progress; /* XXX-VM: useless. */
 	int		rx_vhdrlen;
 	int		rx_merge;	/* merged rx bufs in use */
 
@@ -197,17 +196,13 @@ pci_vtnet_txwait(struct pci_vtnet_softc *sc)
 
 /*
  * If the receive thread is active then stall until it is done.
+ * It is enough to lock and unlock the RX mutex.
  */
 static void
 pci_vtnet_rxwait(struct pci_vtnet_softc *sc)
 {
 
 	pthread_mutex_lock(&sc->rx_mtx);
-	while (sc->rx_in_progress) {
-		pthread_mutex_unlock(&sc->rx_mtx);
-		usleep(10000);
-		pthread_mutex_lock(&sc->rx_mtx);
-	}
 	pthread_mutex_unlock(&sc->rx_mtx);
 }
 
@@ -581,9 +576,7 @@ pci_vtnet_rx_callback(int fd, enum ev_type type, void *param)
 	struct pci_vtnet_softc *sc = param;
 
 	pthread_mutex_lock(&sc->rx_mtx);
-	sc->rx_in_progress = 1;
 	sc->pci_vtnet_rx(sc);
-	sc->rx_in_progress = 0;
 	pthread_mutex_unlock(&sc->rx_mtx);
 
 }
@@ -897,7 +890,6 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 
 	sc->rx_merge = 1;
 	sc->rx_vhdrlen = sizeof(struct virtio_net_rxhdr);
-	sc->rx_in_progress = 0;
 	pthread_mutex_init(&sc->rx_mtx, NULL); 
 
 	/* 
