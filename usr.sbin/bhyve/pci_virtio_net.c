@@ -147,7 +147,7 @@ struct pci_vtnet_softc {
 	struct virtio_net_config vsc_config;
 
 	pthread_mutex_t	rx_mtx;
-	int		rx_in_progress;
+	int		rx_in_progress; /* XXX-VM: useless. */
 	int		rx_vhdrlen;
 	int		rx_merge;	/* merged rx bufs in use */
 
@@ -617,12 +617,11 @@ pci_vtnet_proctx(struct pci_vtnet_softc *sc, struct vqueue_info *vq)
 	 */
 	n = vq_getchain(vq, &idx, iov, VTNET_MAXSEGS, NULL);
 	assert(n >= 1 && n <= VTNET_MAXSEGS);
-	plen = 0;
-	tlen = iov[0].iov_len;
-	for (i = 1; i < n; i++) {
-		plen += iov[i].iov_len;
+	tlen = 0;
+	for (i = 0; i < n; i++) {
 		tlen += iov[i].iov_len;
 	}
+	plen = tlen - iov[0].iov_len;
 
 	DPRINTF(("virtio: packet send, %d bytes, %d segs\n\r", plen, n));
 	sc->pci_vtnet_tx(sc, &iov[1], n - 1, plen);
