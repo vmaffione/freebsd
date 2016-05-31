@@ -123,6 +123,21 @@ struct vm_pptdev_mmio {
 	size_t		len;
 };
 
+struct vm_user_buf {
+	vm_paddr_t	gpa;
+	void 		*addr;
+	size_t		len;
+};
+
+struct vm_io_reg_handler {
+	uint16_t		port;		/* I/O address */
+	uint16_t		in;		/* 0 out, 1 in */
+	uint32_t		mask_data;	/* 0 means match anything */
+	uint32_t		data;		/* data to match */
+	enum vm_io_regh_type	type;		/* handler type */
+	void			*arg;		/* handler argument */
+};
+
 struct vm_pptdev_msi {
 	int		vcpu;
 	int		bus;
@@ -286,6 +301,10 @@ enum {
 	IOCNUM_RTC_WRITE = 101,
 	IOCNUM_RTC_SETTIME = 102,
 	IOCNUM_RTC_GETTIME = 103,
+
+	/* host mmap and IO handler */
+	IOCNUM_MAP_USER_BUF = 104,
+	IOCNUM_IO_REG_HANDLER = 105,
 };
 
 #define	VM_RUN		\
@@ -344,6 +363,10 @@ enum {
 	_IOW('v', IOCNUM_UNBIND_PPTDEV, struct vm_pptdev)
 #define	VM_MAP_PPTDEV_MMIO \
 	_IOW('v', IOCNUM_MAP_PPTDEV_MMIO, struct vm_pptdev_mmio)
+#define	VM_MAP_USER_BUF \
+	_IOW('v', IOCNUM_MAP_USER_BUF, struct vm_user_buf)
+#define	VM_IO_REG_HANDLER \
+	_IOW('v', IOCNUM_IO_REG_HANDLER, struct vm_io_reg_handler)
 #define	VM_PPTDEV_MSI \
 	_IOW('v', IOCNUM_PPTDEV_MSI, struct vm_pptdev_msi)
 #define	VM_PPTDEV_MSIX \

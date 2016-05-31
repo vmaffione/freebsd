@@ -183,6 +183,7 @@ int vm_mmap_memseg(struct vm *vm, vm_paddr_t gpa, int segid, vm_ooffset_t off,
 int vm_alloc_memseg(struct vm *vm, int ident, size_t len, bool sysmem);
 void vm_free_memseg(struct vm *vm, int ident);
 int vm_map_mmio(struct vm *vm, vm_paddr_t gpa, size_t len, vm_paddr_t hpa);
+int vm_map_usermem(struct vm *vm, vm_paddr_t gpa, size_t len, void *buf, struct thread *td);
 int vm_unmap_mmio(struct vm *vm, vm_paddr_t gpa, size_t len);
 int vm_assign_pptdev(struct vm *vm, int bus, int slot, int func);
 int vm_unassign_pptdev(struct vm *vm, int bus, int slot, int func);
@@ -321,6 +322,7 @@ struct vatpic *vm_atpic(struct vm *vm);
 struct vatpit *vm_atpit(struct vm *vm);
 struct vpmtmr *vm_pmtmr(struct vm *vm);
 struct vrtc *vm_rtc(struct vm *vm);
+struct ioregh *vm_ioregh(struct vm *vm);
 
 /*
  * Inject exception 'vector' into the guest vcpu. This function returns 0 on
@@ -417,7 +419,13 @@ enum vm_intr_trigger {
 	EDGE_TRIGGER,
 	LEVEL_TRIGGER
 };
-	
+
+enum vm_io_regh_type {
+	VM_IO_REGH_DELETE,
+	VM_IO_REGH_KWEVENTS,	/* kernel wait events */
+	VM_IO_REGH_MAX
+};
+
 /*
  * The 'access' field has the format specified in Table 21-2 of the Intel
  * Architecture Manual vol 3b.

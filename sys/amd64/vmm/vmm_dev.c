@@ -55,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include "vmm_lapic.h"
 #include "vmm_stat.h"
 #include "vmm_mem.h"
+#include "vmm_ioport.h"
 #include "io/ppt.h"
 #include "io/vatpic.h"
 #include "io/vioapic.h"
@@ -300,6 +301,8 @@ vmmdev_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 	struct vm_pptdev_mmio *pptmmio;
 	struct vm_pptdev_msi *pptmsi;
 	struct vm_pptdev_msix *pptmsix;
+	struct vm_user_buf *usermem;
+	struct vm_io_reg_handler *ioregh;
 	struct vm_nmi *vmnmi;
 	struct vm_stats *vmstats;
 	struct vm_stat_desc *statdesc;
@@ -358,6 +361,7 @@ vmmdev_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 	case VM_UNBIND_PPTDEV:
 	case VM_ALLOC_MEMSEG:
 	case VM_MMAP_MEMSEG:
+	case VM_MAP_USER_BUF:
 	case VM_REINIT:
 		/*
 		 * ioctls that operate on the entire virtual machine must
@@ -432,6 +436,16 @@ vmmdev_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 		error = ppt_map_mmio(sc->vm, pptmmio->bus, pptmmio->slot,
 				     pptmmio->func, pptmmio->gpa, pptmmio->len,
 				     pptmmio->hpa);
+		break;
+	case VM_MAP_USER_BUF:
+		usermem = (struct vm_user_buf *)data;
+		error = vm_map_usermem(sc->vm, usermem->gpa, usermem->len,
+					usermem->addr, td);
+		break;
+	case VM_IO_REG_HANDLER:
+		ioregh = (struct vm_io_reg_handler *)data;
+		error = vmm_ioport_reg_handler(sc->vm, ioregh->port, ioregh->in, ioregh->mask_data,
+					ioregh->data, ioregh->type, ioregh->arg);
 		break;
 	case VM_BIND_PPTDEV:
 		pptdev = (struct vm_pptdev *)data;
