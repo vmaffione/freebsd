@@ -112,10 +112,12 @@ struct netmap_if_info {
 	uint16_t num_rx_slots;
 };
 
+int ptn_memdev_attach(void *mem_ptr, uint32_t mem_size, uint16_t mem_id);
 int ptnetmap_get_netmap_if(struct ptnetmap_state *ptn,
 			   struct netmap_if_info *nif);
 struct ptnetmap_state * get_ptnetmap(struct net_backend *be);
-int ptn_memdev_attach(void *mem_ptr, uint32_t mem_size, uint16_t mem_id);
+uint32_t ptnetmap_ack_features(struct ptnetmap_state *ptn,
+			       uint32_t wanted_features);
 
 
 #include "pci_emul.h"
