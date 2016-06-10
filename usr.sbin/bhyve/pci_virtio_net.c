@@ -50,7 +50,6 @@ __FBSDID("$FreeBSD$");
 #include <strings.h>
 #include <unistd.h>
 #include <assert.h>
-#include <md5.h>
 #include <pthread.h>
 #include <pthread_np.h>
 
@@ -415,9 +414,6 @@ pci_vtnet_ping_ctlq(void *vsc, struct vqueue_info *vq)
 static int
 pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 {
-	MD5_CTX mdctx;
-	unsigned char digest[16];
-	char nstr[80];
 	char tname[MAXCOMLEN + 1];
 	struct pci_vtnet_softc *sc;
 	char *devname;
@@ -478,24 +474,8 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		free(devname);
 	}
 
-	/*
-	 * The default MAC address is the standard NetApp OUI of 00-a0-98,
-	 * followed by an MD5 of the PCI slot/func number and dev name
-	 */
 	if (!mac_provided) {
-		snprintf(nstr, sizeof(nstr), "%d-%d-%s", pi->pi_slot,
-		    pi->pi_func, vmname);
-
-		MD5Init(&mdctx);
-		MD5Update(&mdctx, nstr, strlen(nstr));
-		MD5Final(digest, &mdctx);
-
-		sc->vsc_config.mac[0] = 0x00;
-		sc->vsc_config.mac[1] = 0xa0;
-		sc->vsc_config.mac[2] = 0x98;
-		sc->vsc_config.mac[3] = digest[0];
-		sc->vsc_config.mac[4] = digest[1];
-		sc->vsc_config.mac[5] = digest[2];
+		net_genmac(pi, sc->vsc_config.mac);
 	}
 
 	/* initialize config space */
