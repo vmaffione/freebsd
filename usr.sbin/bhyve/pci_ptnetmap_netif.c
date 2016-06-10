@@ -98,8 +98,21 @@ ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 	if (sc == NULL)
 		return 0;
 
-	if (baridx == PTNETMAP_IO_PCI_BAR) {
+	offset = offset & PTNET_IO_MASK;
+
+	if (baridx == PTNETMAP_IO_PCI_BAR && offset < PTNET_IO_END) {
 		switch (offset) {
+		case PTNET_IO_NIFP_OFS:
+		case PTNET_IO_NUM_TX_RINGS:
+		case PTNET_IO_NUM_RX_RINGS:
+		case PTNET_IO_NUM_TX_SLOTS:
+		case PTNET_IO_NUM_RX_SLOTS:
+			/* Fill in device registers with information about
+			 * nifp_offset, num_*x_rings, and num_*x_slots. */
+			ptnet_get_netmap_if(sc);
+
+		default:
+			return sc->ioregs[offset >> 2];
 		}
 	}
 
