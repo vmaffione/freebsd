@@ -127,6 +127,7 @@ static int
 ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 {
 	struct ptnet_softc *sc;
+	char *ptopts, *devname;
 	uint8_t macaddr[6];
 	int mac_provided = 0;
 	int ret;
@@ -141,34 +142,41 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	pi->pi_arg = sc;
 	sc->pi = pi;
 
-	if (opts != NULL) {
-		char *ptopts, *devname;
+	/* Parse command line options. */
+	if (opts == NULL) {
+		fprintf(stderr, "%s: No backend specified\n", __func__);
+		return -1;
+	}
 
-		devname = ptopts = strdup(opts);
-		(void) strsep(&ptopts, ",");
+	devname = ptopts = strdup(opts);
+	(void) strsep(&ptopts, ",");
 
-		if (ptopts != NULL) {
-			ret = net_parsemac(ptopts, macaddr);
-			if (ret != 0) {
-				free(devname);
-				return ret;
-			}
-			mac_provided = 1;
+	if (ptopts != NULL) {
+		ret = net_parsemac(ptopts, macaddr);
+		if (ret != 0) {
+			free(devname);
+			return ret;
 		}
-
-		sc->be = netbe_init(devname, NULL, sc);
-		if (!sc->be) {
-			fprintf(stderr, "net backend initialization failed\n");
-		}
-
-		free(devname);
+		mac_provided = 1;
 	}
 
 	if (!mac_provided) {
 		net_genmac(pi, macaddr);
 	}
 
+	/* Initialize backend. */
+	sc->be = netbe_init(devname, NULL, sc);
+	if (!sc->be) {
+		fprintf(stderr, "net backend initialization failed\n");
+	}
+
+	free(devname);
+
 	sc->ptbe = get_ptnetmap(sc->be);
+	if (!sc->ptbe) {
+		fprintf(stderr, "%s: failed to get ptnetmap\n", __func__);
+		return -1;
+	}
 
 	/* Initialize PCI configuration space. */
 	pci_set_cfgdata16(pi, PCIR_VENDOR, PTNETMAP_PCI_VENDOR_ID);
@@ -191,6 +199,10 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	memset(sc->ioregs, 0, sizeof(sc->ioregs));
 	sc->csb = NULL;
 	sc->ptbe = NULL;
+	sc->ioregs[PTNET_IO_MAC_HI >> 2] = (macaddr[0] << 8) | macaddr[1];
+	sc->ioregs[PTNET_IO_MAC_LO >> 2] = (macaddr[2] << 24) |
+					   (macaddr[3] << 16) |
+					   (macaddr[4] << 8) | macaddr[5];
 
 	sc->num_rings = 0;
 	ptnet_get_netmap_if(sc);
