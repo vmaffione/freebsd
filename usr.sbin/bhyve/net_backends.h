@@ -28,6 +28,7 @@
 #define __NET_BACKENDS_H__
 
 #include <stdint.h>
+#include "mevent.h"
 
 extern int netmap_ioctl_counter;
 
@@ -111,6 +112,11 @@ struct netmap_if_info {
 	uint16_t num_rx_slots;
 };
 
+int ptnetmap_get_netmap_if(struct ptnetmap_state *ptn,
+			   struct netmap_if_info *nif);
+struct ptnetmap_state * get_ptnetmap(struct net_backend *be);
 int ptn_memdev_attach(void *mem_ptr, uint32_t mem_size, uint16_t mem_id);
+
+int net_parsemac(char *mac_str, uint8_t *mac_addr);
 
 #endif /* __NET_BACKENDS_H__ */

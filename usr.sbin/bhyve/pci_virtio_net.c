@@ -413,29 +413,6 @@ pci_vtnet_ping_ctlq(void *vsc, struct vqueue_info *vq)
 #endif
 
 static int
-pci_vtnet_parsemac(char *mac_str, uint8_t *mac_addr)
-{
-        struct ether_addr *ea;
-        char *tmpstr;
-        char zero_addr[ETHER_ADDR_LEN] = { 0, 0, 0, 0, 0, 0 };
-
-        tmpstr = strsep(&mac_str,"=");
-       
-        if ((mac_str != NULL) && (!strcmp(tmpstr,"mac"))) {
-                ea = ether_aton(mac_str);
-
-                if (ea == NULL || ETHER_IS_MULTICAST(ea->octet) ||
-                    memcmp(ea->octet, zero_addr, ETHER_ADDR_LEN) == 0) {
-			fprintf(stderr, "Invalid MAC %s\n", mac_str);
-                        return (EINVAL);
-                } else
-                        memcpy(mac_addr, ea->octet, ETHER_ADDR_LEN);
-        }
-
-        return (0);
-}
-
-static int
 pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 {
 	MD5_CTX mdctx;
@@ -483,7 +460,7 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		(void) strsep(&vtopts, ",");
 
 		if (vtopts != NULL) {
-			err = pci_vtnet_parsemac(vtopts, sc->vsc_config.mac);
+			err = net_parsemac(vtopts, sc->vsc_config.mac);
 			if (err != 0) {
 				free(devname);
 				return (err);

@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 
 #include "bhyverun.h"
 #include "pci_emul.h"
+#include "net_backends.h"
 
 #ifndef PTNET_CSB_ALLOC
 #error "Hypervisor-allocated CSB not supported"
@@ -51,11 +52,42 @@ __FBSDID("$FreeBSD$");
 struct ptnet_softc {
 	struct pci_devinst	*pi;
 
+	struct net_backend	*be;
 	struct ptnetmap_state	*ptbe;
+
 	unsigned int		num_rings;
 	uint32_t		ioregs[PTNET_IO_END >> 2];
 	void			*csb;
 };
+
+static int
+ptnet_get_netmap_if(struct ptnet_softc *sc)
+{
+	unsigned int num_rings;
+	struct netmap_if_info nif;
+	int ret;
+
+	ret = ptnetmap_get_netmap_if(sc->ptbe, &nif);
+	if (ret) {
+		return ret;
+	}
+
+	sc->ioregs[PTNET_IO_NIFP_OFS >> 2] = nif.nifp_offset;
+	sc->ioregs[PTNET_IO_NUM_TX_RINGS >> 2] = nif.num_tx_rings;
+	sc->ioregs[PTNET_IO_NUM_RX_RINGS >> 2] = nif.num_rx_rings;
+	sc->ioregs[PTNET_IO_NUM_TX_SLOTS >> 2] = nif.num_tx_slots;
+	sc->ioregs[PTNET_IO_NUM_RX_SLOTS >> 2] = nif.num_rx_slots;
+
+	num_rings = sc->ioregs[PTNET_IO_NUM_TX_RINGS >> 2] +
+		    sc->ioregs[PTNET_IO_NUM_RX_RINGS >> 2];
+	if (sc->num_rings && num_rings && sc->num_rings != num_rings) {
+		fprintf(stderr, "Number of rings changed: not supported\n");
+		return EINVAL;
+	}
+	sc->num_rings = num_rings;
+
+	return 0;
+}
 
 static uint64_t
 ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
@@ -95,6 +127,8 @@ static int
 ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 {
 	struct ptnet_softc *sc;
+	uint8_t macaddr[6];
+	int mac_provided = 0;
 	int ret;
 
 	sc = calloc(1, sizeof(*sc));
@@ -106,6 +140,31 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	/* Link our softc in the pci_devinst. */
 	pi->pi_arg = sc;
 	sc->pi = pi;
+
+	if (opts != NULL) {
+		char *ptopts, *devname;
+
+		devname = ptopts = strdup(opts);
+		(void) strsep(&ptopts, ",");
+
+		if (ptopts != NULL) {
+			ret = net_parsemac(ptopts, macaddr);
+			if (ret != 0) {
+				free(devname);
+				return ret;
+			}
+			mac_provided = 1;
+		}
+
+		sc->be = netbe_init(devname, NULL, sc);
+		if (!sc->be) {
+			fprintf(stderr, "net backend initialization failed\n");
+		}
+
+		free(devname);
+	}
+
+	sc->ptbe = get_ptnetmap(sc->be);
 
 	/* Initialize PCI configuration space. */
 	pci_set_cfgdata16(pi, PCIR_VENDOR, PTNETMAP_PCI_VENDOR_ID);
@@ -127,8 +186,13 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	/* Initialize registers and data structures. */
 	memset(sc->ioregs, 0, sizeof(sc->ioregs));
 	sc->csb = NULL;
-	sc->num_rings = 0;
 	sc->ptbe = NULL;
+
+	sc->num_rings = 0;
+	ptnet_get_netmap_if(sc);
+
+	/* Allocate a BAR for MSI-X vectors. */
+	pci_emul_add_msixcap(pi, sc->num_rings, PTNETMAP_MSIX_PCI_BAR);
 
 	return 0;
 }

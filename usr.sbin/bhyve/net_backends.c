@@ -444,12 +444,14 @@ ptnetmap_ack_features(struct ptnetmap_state *ptn, uint32_t wanted_features)
 struct ptnetmap_state *
 get_ptnetmap(struct net_backend *be)
 {
-	struct netmap_priv *priv = be->priv;
+	struct netmap_priv *priv;
 
 	/* Check that this is a netmap backend. */
-	if (be->set_cap != netmap_set_cap) {
+	if (!be || be->set_cap != netmap_set_cap) {
 		return NULL;
 	}
+
+	priv = be->priv;
 
 	return &priv->ptnetmap;
 }
@@ -1074,4 +1076,27 @@ netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt, int *more)
 	}
 
 	return ret;
+}
+
+int
+net_parsemac(char *mac_str, uint8_t *mac_addr)
+{
+        struct ether_addr *ea;
+        char *tmpstr;
+        char zero_addr[ETHER_ADDR_LEN] = { 0, 0, 0, 0, 0, 0 };
+
+        tmpstr = strsep(&mac_str,"=");
+
+        if ((mac_str != NULL) && (!strcmp(tmpstr,"mac"))) {
+                ea = ether_aton(mac_str);
+
+                if (ea == NULL || ETHER_IS_MULTICAST(ea->octet) ||
+                    memcmp(ea->octet, zero_addr, ETHER_ADDR_LEN) == 0) {
+			fprintf(stderr, "Invalid MAC %s\n", mac_str);
+                        return (EINVAL);
+                } else
+                        memcpy(mac_addr, ea->octet, ETHER_ADDR_LEN);
+        }
+
+        return (0);
 }
