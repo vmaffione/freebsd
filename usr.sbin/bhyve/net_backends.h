@@ -117,6 +117,9 @@ int ptnetmap_get_netmap_if(struct ptnetmap_state *ptn,
 struct ptnetmap_state * get_ptnetmap(struct net_backend *be);
 int ptn_memdev_attach(void *mem_ptr, uint32_t mem_size, uint16_t mem_id);
 
+
+#include "pci_emul.h"
 int net_parsemac(char *mac_str, uint8_t *mac_addr);
+void net_genmac(struct pci_devinst *pi, uint8_t *macaddr);
 
 #endif /* __NET_BACKENDS_H__ */

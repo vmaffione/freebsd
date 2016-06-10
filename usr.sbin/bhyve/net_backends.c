@@ -1078,6 +1078,13 @@ netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt, int *more)
 	return ret;
 }
 
+/*
+ * Some utils functions, which should go in a separate module.
+ */
+#include <md5.h>
+#include "pci_emul.h"
+#include "bhyverun.h"
+
 int
 net_parsemac(char *mac_str, uint8_t *mac_addr)
 {
@@ -1099,4 +1106,30 @@ net_parsemac(char *mac_str, uint8_t *mac_addr)
         }
 
         return (0);
+}
+
+void
+net_genmac(struct pci_devinst *pi, uint8_t *macaddr)
+{
+	/*
+	 * The default MAC address is the standard NetApp OUI of 00-a0-98,
+	 * followed by an MD5 of the PCI slot/func number and dev name
+	 */
+	MD5_CTX mdctx;
+	unsigned char digest[16];
+	char nstr[80];
+
+	snprintf(nstr, sizeof(nstr), "%d-%d-%s", pi->pi_slot,
+	    pi->pi_func, vmname);
+
+	MD5Init(&mdctx);
+	MD5Update(&mdctx, nstr, strlen(nstr));
+	MD5Final(digest, &mdctx);
+
+	macaddr[0] = 0x00;
+	macaddr[1] = 0xa0;
+	macaddr[2] = 0x98;
+	macaddr[3] = digest[0];
+	macaddr[4] = digest[1];
+	macaddr[5] = digest[2];
 }

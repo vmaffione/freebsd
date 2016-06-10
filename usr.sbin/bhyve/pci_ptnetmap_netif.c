@@ -164,6 +164,10 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		free(devname);
 	}
 
+	if (!mac_provided) {
+		net_genmac(pi, macaddr);
+	}
+
 	sc->ptbe = get_ptnetmap(sc->be);
 
 	/* Initialize PCI configuration space. */
