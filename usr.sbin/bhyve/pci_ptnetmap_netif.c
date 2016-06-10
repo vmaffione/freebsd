@@ -31,6 +31,7 @@ __FBSDID("$FreeBSD$");
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <net/if.h>	/* IFNAMSIZ */
 #include <net/netmap.h>
@@ -48,7 +49,12 @@ __FBSDID("$FreeBSD$");
 
 
 struct ptnet_softc {
-	struct pci_devinst *pi;		/* PCI device instance */
+	struct pci_devinst	*pi;
+
+	struct ptnetmap_state	*ptbe;
+	unsigned int		num_rings;
+	uint32_t		ioregs[PTNET_IO_END >> 2];
+	void			*csb;
 };
 
 static uint64_t
@@ -65,8 +71,8 @@ ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 		}
 	}
 
-	printf("%s: Unexpected register read [bar %u, offset %lx size %d]\n",
-		__func__, baridx, offset, size);
+	fprintf(stderr, "%s: Unexpected register read [bar %u, offset %lx "
+		"size %d]\n", __func__, baridx, offset, size);
 
 	return 0;
 }
@@ -80,8 +86,8 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 	if (sc == NULL)
 		return;
 
-	printf("%s: Unexpected register write [bar %u, offset %lx size %d "
-	       "value %lx]\n", __func__, baridx, offset, size, value);
+	fprintf(stderr, "%s: Unexpected register write [bar %u, offset %lx "
+		"size %d value %lx]\n", __func__, baridx, offset, size, value);
 }
 
 /* PCI device initialization. */
@@ -117,6 +123,12 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 			__func__, ret);
 		return ret;
 	}
+
+	/* Initialize registers and data structures. */
+	memset(sc->ioregs, 0, sizeof(sc->ioregs));
+	sc->csb = NULL;
+	sc->num_rings = 0;
+	sc->ptbe = NULL;
 
 	return 0;
 }
