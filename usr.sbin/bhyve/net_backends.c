@@ -55,6 +55,7 @@
 #if (NETMAP_API < 11)
 #error "Netmap API version must be >= 11"
 #endif
+#include <dev/netmap/netmap_virt.h>
 
 /*
  * The API for network backends. This might need to be exposed
@@ -108,11 +109,6 @@ struct net_backend {
 	 */
 	int (*set_features)(struct net_backend *be, uint64_t features,
 			    unsigned int vnet_hdr_len);
-
-	/*
-	 * Get ptnetmap_state if the backend support ptnetmap
-	 */
-	struct ptnetmap_state * (*get_ptnetmap)(struct net_backend *be);
 
 	struct pci_vtnet_softc *sc;
 	int fd;
@@ -171,12 +167,6 @@ netbe_null_recv(struct net_backend *be, struct iovec *iov,
 	return -1; /* never called, i believe */
 }
 
-static struct ptnetmap_state *
-netbe_null_get_ptnetmap(struct net_backend *be)
-{
-	return NULL;
-}
-
 static struct net_backend null_backend = {
 	.name = "null",
 	.init = netbe_null_init,
@@ -185,7 +175,6 @@ static struct net_backend null_backend = {
 	.recv = netbe_null_recv,
 	.get_features = netbe_null_get_features,
 	.set_features = netbe_null_set_features,
-	.get_ptnetmap = netbe_null_get_ptnetmap,
 };
 
 DATA_SET(net_backend_set, null_backend);
@@ -341,6 +330,8 @@ DATA_SET(net_backend_set, tap_backend);
 
 #define NETMAP_POLLMASK (POLLIN | POLLRDNORM | POLLRDBAND)
 
+#define VNET_HDR_LEN	sizeof(struct virtio_net_rxhdr)
+
 struct netmap_priv {
 	char ifname[IFNAMSIZ];
 	struct nm_desc *nmd;
@@ -357,6 +348,8 @@ struct netmap_priv {
 	int rx_avail;
 	int rx_morefrag;
 	int rx_avail_slots;
+
+	struct ptnetmap_state ptnetmap;
 };
 
 static void *
@@ -405,10 +398,31 @@ netmap_set_vnet_hdr_len(struct net_backend *be, int vnet_hdr_len)
 	return 0;
 }
 
+static int
+netmap_has_vnet_hdr_len(struct net_backend *be, unsigned vnet_hdr_len)
+{
+	int prev_hdr_len = be->be_vnet_hdr_len;
+	int ret;
+
+	if (vnet_hdr_len == prev_hdr_len) {
+		return 1;
+	}
+
+	ret = netmap_set_vnet_hdr_len(be, vnet_hdr_len);
+	if (ret) {
+		return 0;
+	}
+
+	netmap_set_vnet_hdr_len(be, prev_hdr_len);
+
+	return 1;
+}
+
 static uint64_t
 netmap_get_features(struct net_backend *be)
 {
-	return NETMAP_FEATURES;
+	return netmap_has_vnet_hdr_len(be, VNET_HDR_LEN) ?
+			NETMAP_FEATURES : 0;
 }
 
 static int
@@ -418,7 +432,125 @@ netmap_set_features(struct net_backend *be, uint64_t features,
 	return netmap_set_vnet_hdr_len(be, vnet_hdr_len);
 }
 
-/* used by netmap and ptnetmap during the initialization */
+/* Store and return the features we agreed upon. */
+uint32_t
+ptnetmap_ack_features(struct ptnetmap_state *ptn, uint32_t wanted_features)
+{
+	ptn->acked_features = ptn->features & wanted_features;
+
+	return ptn->acked_features;
+}
+
+struct ptnetmap_state *
+get_ptnetmap(struct net_backend *be)
+{
+	struct netmap_priv *priv = be->priv;
+
+	/* Check that this is a netmap backend. */
+	if (be->set_features != netmap_set_features) {
+		return NULL;
+	}
+
+	return &priv->ptnetmap;
+}
+
+int
+ptnetmap_get_netmap_if(struct ptnetmap_state *ptn, struct netmap_if_info *nif)
+{
+	struct netmap_priv *priv = ptn->netmap_priv;
+
+	memset(nif, 0, sizeof(*nif));
+	if (priv->nmd == NULL) {
+		return EINVAL;
+	}
+
+	nif->nifp_offset = priv->nmd->req.nr_offset;
+	nif->num_tx_rings = priv->nmd->req.nr_tx_rings;
+	nif->num_rx_rings = priv->nmd->req.nr_rx_rings;
+	nif->num_tx_slots = priv->nmd->req.nr_tx_slots;
+	nif->num_rx_slots = priv->nmd->req.nr_rx_slots;
+
+	return 0;
+}
+
+int
+ptnetmap_get_host_memid(struct ptnetmap_state *ptn)
+{
+	struct netmap_priv *priv = ptn->netmap_priv;
+
+	if (priv->nmd == NULL) {
+		return EINVAL;
+	}
+
+	return priv->nmd->req.nr_arg2;
+}
+
+int
+ptnetmap_create(struct ptnetmap_state *ptn, struct ptnetmap_cfg *cfg)
+{
+	struct netmap_priv *priv = ptn->netmap_priv;
+	struct nmreq req;
+	int err;
+
+	if (!(ptn->acked_features & NET_PTN_FEATURES_BASE)) {
+		fprintf(stderr, "%s: ptnetmap features not acked\n",
+			__func__);
+		return EINVAL;
+	}
+
+	if (ptn->running) {
+		return 0;
+	}
+
+	/* XXX We should stop the netmap evloop here. */
+
+	/* Ask netmap to create kthreads for this interface. */
+	memset(&req, 0, sizeof(req));
+	strncpy(req.nr_name, priv->ifname, sizeof(req.nr_name));
+	req.nr_version = NETMAP_API;
+	ptnetmap_write_cfg(&req, cfg);
+	req.nr_cmd = NETMAP_PT_HOST_CREATE;
+	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
+	if (err) {
+		fprintf(stderr, "%s: Unable to create ptnetmap kthreads on "
+			"%s [errno=%d]", __func__, priv->ifname, errno);
+		return err;
+	}
+
+	ptn->running = 1;
+
+	return 0;
+}
+
+int
+ptnetmap_delete(struct ptnetmap_state *ptn)
+{
+	struct netmap_priv *priv = ptn->netmap_priv;
+	struct nmreq req;
+	int err;
+
+	if (!ptn->running) {
+		return 0;
+	}
+
+	/* Ask netmap to delete kthreads for this interface. */
+	memset(&req, 0, sizeof(req));
+	strncpy(req.nr_name, priv->ifname, sizeof(req.nr_name));
+	req.nr_version = NETMAP_API;
+	req.nr_cmd = NETMAP_PT_HOST_DELETE;
+	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
+	if (err) {
+		fprintf(stderr, "%s: Unable to create ptnetmap kthreads on "
+			"%s [errno=%d]", __func__, priv->ifname, errno);
+		return err;
+	}
+
+	ptn->running = 0;
+
+	return 0;
+}
+
+/* Used by netmap at initialization time. */
 static int
 netmap_common_init(struct net_backend *be, struct netmap_priv *priv,
 		   uint32_t nr_flags, const char *devname,
@@ -467,6 +599,7 @@ netmap_init(struct net_backend *be, const char *devname,
 	    net_backend_cb_t cb, void *param)
 {
 	struct netmap_priv *priv = NULL;
+	int ptnetmap = 0;
 
 	priv = calloc(1, sizeof(struct netmap_priv));
 	if (priv == NULL) {
@@ -474,8 +607,22 @@ netmap_init(struct net_backend *be, const char *devname,
 		return -1;
 	}
 
-	if (netmap_common_init(be, priv, 0, devname, cb, param)) {
+	if (netmap_common_init(be, priv, ptnetmap ? NR_PTNETMAP_HOST : 0,
+			       devname, cb, param)) {
 		goto err;
+	}
+
+	if (ptnetmap) {
+		priv->ptnetmap.netmap_priv = priv;
+		priv->ptnetmap.features = NET_PTN_FEATURES_BASE;
+		priv->ptnetmap.acked_features = 0;
+		priv->ptnetmap.running = 0;
+		if (netmap_has_vnet_hdr_len(be, VNET_HDR_LEN)) {
+			priv->ptnetmap.features |= NET_PTN_FEATURES_VNET_HDR;
+		}
+		/* XXX Call ptn_memdev_attach() here or in get_ptnetmap ? */
+		ptn_memdev_attach(priv->nmd->mem, priv->nmd->memsize,
+				  priv->nmd->req.nr_arg2);
 	}
 
 	be->priv = priv;
@@ -494,6 +641,9 @@ netmap_cleanup(struct net_backend *be)
 	struct netmap_priv *priv = be->priv;
 
 	if (be->priv) {
+		if (priv->ptnetmap.running) {
+			ptnetmap_delete(&priv->ptnetmap);
+		}
 		nm_close(priv->nmd);
 		free(be->priv);
 		be->priv = NULL;
@@ -741,11 +891,6 @@ netbe_fix(struct net_backend *be)
 			be, be->name);
 		be->set_features = netbe_null_set_features;
 	}
-	if (be->get_ptnetmap == NULL) {
-		/*fprintf(stderr, "missing set_features for %p %s\n",
-			be, be->name);*/
-		be->get_ptnetmap = netbe_null_get_ptnetmap;
-	}
 }
 
 /*
@@ -836,9 +981,8 @@ netbe_set_features(struct net_backend *be, uint64_t features,
 		return 0;
 
 	/* There are only three valid lengths. */
-	if (vnet_hdr_len && vnet_hdr_len != sizeof(struct virtio_net_rxhdr)
-		&& vnet_hdr_len != (sizeof(struct virtio_net_rxhdr) -
-				    sizeof(uint16_t)))
+	if (vnet_hdr_len && vnet_hdr_len != VNET_HDR_LEN
+		&& vnet_hdr_len != (VNET_HDR_LEN - sizeof(uint16_t)))
 		return -1;
 
 	be->fe_vnet_hdr_len = vnet_hdr_len;
@@ -919,7 +1063,7 @@ netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt, int *more)
 		 */
 		memset(vh, 0, hlen);
 
-		if (hlen == sizeof(struct virtio_net_rxhdr)) {
+		if (hlen == VNET_HDR_LEN) {
 			vh->vrh_bufs = 1;
 		}
 	}
