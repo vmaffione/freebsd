@@ -98,7 +98,7 @@ ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 	if (sc == NULL)
 		return 0;
 
-	offset = offset & PTNET_IO_MASK;
+	offset &= PTNET_IO_MASK;
 
 	if (baridx == PTNETMAP_IO_PCI_BAR && offset < PTNET_IO_END) {
 		switch (offset) {
@@ -127,9 +127,23 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 	      int baridx, uint64_t offset, int size, uint64_t value)
 {
 	struct ptnet_softc *sc = pi->pi_arg;
+	unsigned int index;
 
 	if (sc == NULL)
 		return;
+
+	offset &= PTNET_IO_MASK;
+	index = offset >> 2;
+
+	if (baridx == PTNETMAP_IO_PCI_BAR && offset < PTNET_IO_END) {
+		switch (offset) {
+		case PTNET_IO_PTFEAT:
+			value = ptnetmap_ack_features(sc->ptbe, value);
+			sc->ioregs[index] = value;
+			break;
+		}
+		return;
+	}
 
 	fprintf(stderr, "%s: Unexpected register write [bar %u, offset %lx "
 		"size %d value %lx]\n", __func__, baridx, offset, size, value);
@@ -181,6 +195,7 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	sc->be = netbe_init(devname, NULL, sc);
 	if (!sc->be) {
 		fprintf(stderr, "net backend initialization failed\n");
+		return -1;
 	}
 
 	free(devname);
