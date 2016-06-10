@@ -84,4 +84,33 @@ struct virtio_net_rxhdr {
 	uint16_t	vrh_bufs;
 } __packed;
 
+/*
+ * ptnetmap definitions
+ */
+struct ptnetmap_state {
+	void		*netmap_priv;
+
+	/* True if ptnetmap kthreads are running. */
+	int		running;
+
+	/* Feature acknoweledgement support. */
+	unsigned long	features;
+	unsigned long	acked_features;
+
+	/* Info about netmap memory. */
+	uint32_t	memsize;
+	void		*mem;
+};
+
+/* Used to get read-only info. */
+struct netmap_if_info {
+	uint32_t nifp_offset;
+	uint16_t num_tx_rings;
+	uint16_t num_rx_rings;
+	uint16_t num_tx_slots;
+	uint16_t num_rx_slots;
+};
+
+int ptn_memdev_attach(void *mem_ptr, uint32_t mem_size, uint16_t mem_id);
+
 #endif /* __NET_BACKENDS_H__ */
