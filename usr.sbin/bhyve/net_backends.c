@@ -101,14 +101,14 @@ struct net_backend {
 	 * support. Possible features are TSO, UFO and checksum offloading
 	 * in both rx and tx direction and for both IPv4 and IPv6.
 	 */
-	uint64_t (*get_features)(struct net_backend *be);
+	uint64_t (*get_cap)(struct net_backend *be);
 
 	/*
 	 * Tell the backend to enable/disable the specified virtio-net
-	 * features.
+	 * features (capabilities).
 	 */
-	int (*set_features)(struct net_backend *be, uint64_t features,
-			    unsigned int vnet_hdr_len);
+	int (*set_cap)(struct net_backend *be, uint64_t features,
+		       unsigned int vnet_hdr_len);
 
 	struct pci_vtnet_softc *sc;
 	int fd;
@@ -138,14 +138,14 @@ netbe_null_cleanup(struct net_backend *be)
 }
 
 static uint64_t
-netbe_null_get_features(struct net_backend *be)
+netbe_null_get_cap(struct net_backend *be)
 {
 	D("");
 	return 0;
 }
 
 static int
-netbe_null_set_features(struct net_backend *be, uint64_t features,
+netbe_null_set_cap(struct net_backend *be, uint64_t features,
 			unsigned vnet_hdr_len)
 {
 	D("setting 0x%lx", features);
@@ -173,8 +173,8 @@ static struct net_backend null_backend = {
 	.cleanup = netbe_null_cleanup,
 	.send = netbe_null_send,
 	.recv = netbe_null_recv,
-	.get_features = netbe_null_get_features,
-	.set_features = netbe_null_set_features,
+	.get_cap = netbe_null_get_cap,
+	.set_cap = netbe_null_set_cap,
 };
 
 DATA_SET(net_backend_set, null_backend);
@@ -293,13 +293,13 @@ tap_recv(struct net_backend *be, struct iovec *iov, int iovcnt, int *more)
 }
 
 static uint64_t
-tap_get_features(struct net_backend *be)
+tap_get_cap(struct net_backend *be)
 {
 	return 0; // nothing extra
 }
 
 static int
-tap_set_features(struct net_backend *be, uint64_t features,
+tap_set_cap(struct net_backend *be, uint64_t features,
 		 unsigned vnet_hdr_len)
 {
 	return 0; /* success */
@@ -311,8 +311,8 @@ static struct net_backend tap_backend = {
 	.cleanup = tap_cleanup,
 	.send = tap_send,
 	.recv = tap_recv,
-	.get_features = tap_get_features,
-	.set_features = tap_set_features,
+	.get_cap = tap_get_cap,
+	.set_cap = tap_set_cap,
 };
 
 DATA_SET(net_backend_set, tap_backend);
@@ -419,14 +419,14 @@ netmap_has_vnet_hdr_len(struct net_backend *be, unsigned vnet_hdr_len)
 }
 
 static uint64_t
-netmap_get_features(struct net_backend *be)
+netmap_get_cap(struct net_backend *be)
 {
 	return netmap_has_vnet_hdr_len(be, VNET_HDR_LEN) ?
 			NETMAP_FEATURES : 0;
 }
 
 static int
-netmap_set_features(struct net_backend *be, uint64_t features,
+netmap_set_cap(struct net_backend *be, uint64_t features,
 		    unsigned vnet_hdr_len)
 {
 	return netmap_set_vnet_hdr_len(be, vnet_hdr_len);
@@ -447,7 +447,7 @@ get_ptnetmap(struct net_backend *be)
 	struct netmap_priv *priv = be->priv;
 
 	/* Check that this is a netmap backend. */
-	if (be->set_features != netmap_set_features) {
+	if (be->set_cap != netmap_set_cap) {
 		return NULL;
 	}
 
@@ -847,8 +847,8 @@ static struct net_backend netmap_backend = {
 	.cleanup = netmap_cleanup,
 	.send = netmap_send,
 	.recv = netmap_recv,
-	.get_features = netmap_get_features,
-	.set_features = netmap_set_features,
+	.get_cap = netmap_get_cap,
+	.set_cap = netmap_set_cap,
 };
 
 DATA_SET(net_backend_set, netmap_backend);
@@ -881,15 +881,15 @@ netbe_fix(struct net_backend *be)
 		fprintf(stderr, "missing recv for %p %s\n", be, be->name);
 		be->recv = netbe_null_recv;
 	}
-	if (be->get_features == NULL) {
-		fprintf(stderr, "missing get_features for %p %s\n",
+	if (be->get_cap == NULL) {
+		fprintf(stderr, "missing get_cap for %p %s\n",
 			be, be->name);
-		be->get_features = netbe_null_get_features;
+		be->get_cap = netbe_null_get_cap;
 	}
-	if (be->set_features == NULL) {
-		fprintf(stderr, "missing set_features for %p %s\n",
+	if (be->set_cap == NULL) {
+		fprintf(stderr, "missing set_cap for %p %s\n",
 			be, be->name);
-		be->set_features = netbe_null_set_features;
+		be->set_cap = netbe_null_set_cap;
 	}
 }
 
@@ -964,15 +964,15 @@ netbe_cleanup(struct net_backend *be)
 }
 
 uint64_t
-netbe_get_features(struct net_backend *be)
+netbe_get_cap(struct net_backend *be)
 {
 	if (be == NULL)
 		return 0;
-	return be->get_features(be);
+	return be->get_cap(be);
 }
 
 int
-netbe_set_features(struct net_backend *be, uint64_t features,
+netbe_set_cap(struct net_backend *be, uint64_t features,
 		   unsigned vnet_hdr_len)
 {
 	int ret;
@@ -987,7 +987,7 @@ netbe_set_features(struct net_backend *be, uint64_t features,
 
 	be->fe_vnet_hdr_len = vnet_hdr_len;
 
-	ret = be->set_features(be, features, vnet_hdr_len);
+	ret = be->set_cap(be, features, vnet_hdr_len);
 	assert(be->be_vnet_hdr_len == 0 ||
 	       be->be_vnet_hdr_len == be->fe_vnet_hdr_len);
 

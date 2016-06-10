@@ -495,7 +495,7 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		if (!sc->vsc_be) {
 			WPRINTF(("net backend initialization failed\n"));
 		} else {
-			vc->vc_hv_caps |= netbe_get_features(sc->vsc_be);
+			vc->vc_hv_caps |= netbe_get_cap(sc->vsc_be);
 		}
 
 		free(devname);
@@ -605,8 +605,8 @@ pci_vtnet_neg_features(void *vsc, uint64_t negotiated_features)
 		sc->rx_vhdrlen -= 2;
 	}
 
-	/* Tell the backend to enable some features it has advertised. */
-	netbe_set_features(sc->vsc_be, negotiated_features, sc->rx_vhdrlen);
+	/* Tell the backend to enable some capabilities it has advertised. */
+	netbe_set_cap(sc->vsc_be, negotiated_features, sc->rx_vhdrlen);
 }
 
 struct pci_devemu pci_de_vnet = {

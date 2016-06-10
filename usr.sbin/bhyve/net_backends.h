@@ -39,8 +39,8 @@ struct net_backend;
 struct net_backend *netbe_init(const char *devname,
 			net_backend_cb_t cb, void *param);
 void	netbe_cleanup(struct net_backend *be);
-uint64_t netbe_get_features(struct net_backend *be);
-int	 netbe_set_features(struct net_backend *be, uint64_t features,
+uint64_t netbe_get_cap(struct net_backend *be);
+int	 netbe_set_cap(struct net_backend *be, uint64_t cap,
 			    unsigned vnet_hdr_len);
 void	netbe_send(struct net_backend *be, struct iovec *iov,
 		   int iovcnt, int len, int more);
