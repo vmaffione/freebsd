@@ -195,39 +195,6 @@ ptnet_ptctl(struct ptnet_softc *sc, uint64_t cmd)
 	sc->ioregs[PTNET_IO_PTSTS >> 2] = ret;
 }
 
-static uint64_t
-ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
-	       int baridx, uint64_t offset, int size)
-{
-	struct ptnet_softc *sc = pi->pi_arg;
-
-	if (sc == NULL)
-		return 0;
-
-	offset &= PTNET_IO_MASK;
-
-	if (baridx == PTNETMAP_IO_PCI_BAR && offset < PTNET_IO_END) {
-		switch (offset) {
-		case PTNET_IO_NIFP_OFS:
-		case PTNET_IO_NUM_TX_RINGS:
-		case PTNET_IO_NUM_RX_RINGS:
-		case PTNET_IO_NUM_TX_SLOTS:
-		case PTNET_IO_NUM_RX_SLOTS:
-			/* Fill in device registers with information about
-			 * nifp_offset, num_*x_rings, and num_*x_slots. */
-			ptnet_get_netmap_if(sc);
-
-		default:
-			return sc->ioregs[offset >> 2];
-		}
-	}
-
-	fprintf(stderr, "%s: Unexpected register read [bar %u, offset %lx "
-		"size %d]\n", __func__, baridx, offset, size);
-
-	return 0;
-}
-
 static void
 ptnet_csb_mapping(struct ptnet_softc *sc)
 {
@@ -247,6 +214,13 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 {
 	struct ptnet_softc *sc = pi->pi_arg;
 	unsigned int index;
+
+	/* Redirect to MSI-X emulation code. */
+	if (baridx == pci_msix_table_bar(pi) ||
+			baridx == pci_msix_pba_bar(pi)) {
+		pci_emul_msix_twrite(pi, offset, size, value);
+		return;
+	}
 
 	if (sc == NULL)
 		return;
@@ -288,6 +262,44 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 
 	fprintf(stderr, "%s: Unexpected register write [bar %u, offset %lx "
 		"size %d value %lx]\n", __func__, baridx, offset, size, value);
+}
+
+static uint64_t
+ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
+	       int baridx, uint64_t offset, int size)
+{
+	struct ptnet_softc *sc = pi->pi_arg;
+
+	if (baridx == pci_msix_table_bar(pi) ||
+			baridx == pci_msix_pba_bar(pi)) {
+		return pci_emul_msix_tread(pi, offset, size);
+	}
+
+	if (sc == NULL)
+		return 0;
+
+	offset &= PTNET_IO_MASK;
+
+	if (baridx == PTNETMAP_IO_PCI_BAR && offset < PTNET_IO_END) {
+		switch (offset) {
+		case PTNET_IO_NIFP_OFS:
+		case PTNET_IO_NUM_TX_RINGS:
+		case PTNET_IO_NUM_RX_RINGS:
+		case PTNET_IO_NUM_TX_SLOTS:
+		case PTNET_IO_NUM_RX_SLOTS:
+			/* Fill in device registers with information about
+			 * nifp_offset, num_*x_rings, and num_*x_slots. */
+			ptnet_get_netmap_if(sc);
+
+		default:
+			return sc->ioregs[offset >> 2];
+		}
+	}
+
+	fprintf(stderr, "%s: Unexpected register read [bar %u, offset %lx "
+		"size %d]\n", __func__, baridx, offset, size);
+
+	return 0;
 }
 
 /* PCI device initialization. */
