@@ -55,7 +55,6 @@
 #if (NETMAP_API < 11)
 #error "Netmap API version must be >= 11"
 #endif
-#include <dev/netmap/netmap_virt.h>
 
 /*
  * The API for network backends. This might need to be exposed
@@ -476,7 +475,7 @@ ptnetmap_get_netmap_if(struct ptnetmap_state *ptn, struct netmap_if_info *nif)
 }
 
 int
-ptnetmap_get_host_memid(struct ptnetmap_state *ptn)
+ptnetmap_get_hostmemid(struct ptnetmap_state *ptn)
 {
 	struct netmap_priv *priv = ptn->netmap_priv;
 

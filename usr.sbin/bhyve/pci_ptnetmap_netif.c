@@ -37,7 +37,11 @@ __FBSDID("$FreeBSD$");
 #include <net/netmap.h>
 #include <dev/netmap/netmap_virt.h>
 
+#include <sys/ioctl.h>
+#include <sys/param.h>
+#include <sys/_cpuset.h>
 #include <machine/vmm.h>
+#include <machine/vmm_dev.h>	/* VM_LAPIC_MSI */
 #include <vmmapi.h>
 
 #include "bhyverun.h"
@@ -87,6 +91,108 @@ ptnet_get_netmap_if(struct ptnet_softc *sc)
 	sc->num_rings = num_rings;
 
 	return 0;
+}
+
+static int
+ptnet_regif(struct ptnet_softc *sc)
+{
+	struct pci_devinst *pi = sc->pi;
+	struct vmctx *vmctx = pi->pi_vmctx;
+	struct ptnetmap_cfg *cfg;
+	unsigned int kick_addr;
+	int ret;
+	int i;
+
+	if (sc->csb == NULL) {
+		fprintf(stderr, "%s: Unexpected NULL CSB", __func__);
+		return -1;
+	}
+
+	cfg = calloc(1, sizeof(*cfg) + sc->num_rings * sizeof(cfg->entries[0]));
+
+	cfg->features = PTNETMAP_CFG_FEAT_CSB | PTNETMAP_CFG_FEAT_EVENTFD;
+	cfg->num_rings = sc->num_rings;
+	cfg->ptrings = sc->csb;
+
+	kick_addr = pi->pi_bar[PTNETMAP_IO_PCI_BAR].addr + PTNET_IO_KICK_BASE;
+
+	for (i = 0; i < sc->num_rings; i++, kick_addr += 4) {
+		struct msix_table_entry *mte;
+
+		cfg->entries[i].irqfd = vm_get_fd(vmctx);
+		cfg->entries[i].ioctl.com = VM_LAPIC_MSI;
+		mte = &pi->pi_msix.table[i];
+		cfg->entries[i].ioctl.data.msix.addr = mte->addr;
+		cfg->entries[i].ioctl.data.msix.msg = mte->msg_data;
+
+		fprintf(stderr, "%s: vector %u, addr %lu, data %u, "
+				"kick_addr %u\n",
+			__func__, i, mte->addr, mte->msg_data, kick_addr);
+
+		ret = vm_io_reg_handler(vmctx, kick_addr /* ioaddr */,
+					0 /* in */, 0 /* mask_data */,
+					0 /* data */, VM_IO_REGH_KWEVENTS,
+					(void *)sc + i /* cookie */);
+		if (ret) {
+			fprintf(stderr, "%s: vm_io_reg_handler %d\n",
+				__func__, ret);
+		}
+		cfg->entries[i].ioeventfd = (uint64_t) (sc + i);
+	}
+
+	ret = ptnetmap_create(sc->ptbe, cfg);
+	free(cfg);
+
+	return ret;
+}
+
+static int
+ptnet_unregif(struct ptnet_softc *sc)
+{
+	struct pci_devinst *pi = sc->pi;
+	struct vmctx *vmctx = pi->pi_vmctx;
+	unsigned int kick_addr;
+	int i;
+
+	kick_addr = pi->pi_bar[PTNETMAP_IO_PCI_BAR].addr + PTNET_IO_KICK_BASE;
+
+	for (i = 0; i < sc->num_rings; i++, kick_addr += 4) {
+		vm_io_reg_handler(vmctx, kick_addr, 0, 0, 0,
+				  VM_IO_REGH_DELETE, 0);
+	}
+
+	return ptnetmap_delete(sc->ptbe);
+}
+
+static void
+ptnet_ptctl(struct ptnet_softc *sc, uint64_t cmd)
+{
+	int ret = EINVAL;
+
+	switch (cmd) {
+	case NET_PARAVIRT_PTCTL_CONFIG:
+		fprintf(stderr, "Ignoring deprecated CONFIG PTCTL\n");
+		break;
+
+	case NET_PARAVIRT_PTCTL_REGIF:
+		/* Emulate a REGIF for the guest. */
+		ret = ptnet_regif(sc);
+		break;
+
+	case NET_PARAVIRT_PTCTL_UNREGIF:
+		/* Emulate an UNREGIF for the guest. */
+		ret = ptnet_unregif(sc);
+		break;
+
+	case NET_PARAVIRT_PTCTL_HOSTMEMID:
+		ret = ptnetmap_get_hostmemid(sc->ptbe);
+		break;
+
+	default:
+		break;
+	}
+
+	sc->ioregs[PTNET_IO_PTSTS >> 2] = ret;
 }
 
 static uint64_t
@@ -141,6 +247,11 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 			value = ptnetmap_ack_features(sc->ptbe, value);
 			sc->ioregs[index] = value;
 			break;
+
+		case PTNET_IO_PTCTL:
+			ptnet_ptctl(sc, value);
+			break;
+
 		}
 		return;
 	}
