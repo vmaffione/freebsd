@@ -28,6 +28,8 @@
 #define __NET_BACKENDS_H__
 
 #include <stdint.h>
+#include <net/netmap.h>
+#include <dev/netmap/netmap_virt.h>
 #include "mevent.h"
 
 extern int netmap_ioctl_counter;
@@ -118,6 +120,9 @@ int ptnetmap_get_netmap_if(struct ptnetmap_state *ptn,
 struct ptnetmap_state * get_ptnetmap(struct net_backend *be);
 uint32_t ptnetmap_ack_features(struct ptnetmap_state *ptn,
 			       uint32_t wanted_features);
+int ptnetmap_get_hostmemid(struct ptnetmap_state *ptn);
+int ptnetmap_create(struct ptnetmap_state *ptn, struct ptnetmap_cfg *cfg);
+int ptnetmap_delete(struct ptnetmap_state *ptn);
 
 
 #include "pci_emul.h"
