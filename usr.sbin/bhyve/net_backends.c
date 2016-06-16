@@ -614,6 +614,8 @@ netmap_init(struct net_backend *be, const char *devname,
 		goto err;
 	}
 
+	be->priv = priv;
+
 	priv->ptnetmap.netmap_priv = priv;
 	priv->ptnetmap.features = NET_PTN_FEATURES_BASE;
 	priv->ptnetmap.acked_features = 0;
@@ -626,8 +628,6 @@ netmap_init(struct net_backend *be, const char *devname,
 		ptn_memdev_attach(priv->nmd->mem, priv->nmd->memsize,
 				  priv->nmd->req.nr_arg2);
 	}
-
-	be->priv = priv;
 
 	return 0;
 
