@@ -277,6 +277,11 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 			sc->ioregs[index] = value;
 			ptnet_csb_mapping(sc);
 			break;
+
+		case PTNET_IO_VNET_HDR_LEN:
+			netbe_set_cap(sc->be, netbe_get_cap(sc->be), value);
+			sc->ioregs[index] = value;
+			break;
 		}
 		return;
 	}
