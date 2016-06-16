@@ -229,6 +229,19 @@ ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 }
 
 static void
+ptnet_csb_mapping(struct ptnet_softc *sc)
+{
+	uint64_t base = ((uint64_t)sc->ioregs[PTNET_IO_CSBBAH >> 2] << 32) |
+			sc->ioregs[PTNET_IO_CSBBAL >> 2];
+	uint64_t len = 4096;
+
+	sc->csb = NULL;
+	if (base) {
+		sc->csb = paddr_guest2host(sc->pi->pi_vmctx, base, len);
+	}
+}
+
+static void
 ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 	      int baridx, uint64_t offset, int size, uint64_t value)
 {
@@ -252,6 +265,18 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 			ptnet_ptctl(sc, value);
 			break;
 
+		case PTNET_IO_CTRL:
+			/* Nothing to do for now (done at regif time). */
+			break;
+
+		case PTNET_IO_CSBBAH:
+			sc->ioregs[index] = value;
+			break;
+
+		case PTNET_IO_CSBBAL:
+			sc->ioregs[index] = value;
+			ptnet_csb_mapping(sc);
+			break;
 		}
 		return;
 	}
