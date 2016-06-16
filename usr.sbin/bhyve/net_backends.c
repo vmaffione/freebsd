@@ -426,7 +426,7 @@ netmap_get_cap(struct net_backend *be)
 
 static int
 netmap_set_cap(struct net_backend *be, uint64_t features,
-		    unsigned vnet_hdr_len)
+	       unsigned vnet_hdr_len)
 {
 	return netmap_set_vnet_hdr_len(be, vnet_hdr_len);
 }
@@ -974,7 +974,7 @@ netbe_get_cap(struct net_backend *be)
 
 int
 netbe_set_cap(struct net_backend *be, uint64_t features,
-		   unsigned vnet_hdr_len)
+	      unsigned vnet_hdr_len)
 {
 	int ret;
 
