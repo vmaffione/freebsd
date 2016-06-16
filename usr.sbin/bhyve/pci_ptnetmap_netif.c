@@ -239,10 +239,6 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 			ptnet_ptctl(sc, value);
 			break;
 
-		case PTNET_IO_CTRL:
-			/* Nothing to do for now (done at regif time). */
-			break;
-
 		case PTNET_IO_CSBBAH:
 			sc->ioregs[index] = value;
 			break;
