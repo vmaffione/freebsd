@@ -367,7 +367,6 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	/* Initialize registers and data structures. */
 	memset(sc->ioregs, 0, sizeof(sc->ioregs));
 	sc->csb = NULL;
-	sc->ptbe = NULL;
 	sc->ioregs[PTNET_IO_MAC_HI >> 2] = (macaddr[0] << 8) | macaddr[1];
 	sc->ioregs[PTNET_IO_MAC_LO >> 2] = (macaddr[2] << 24) |
 					   (macaddr[3] << 16) |

@@ -445,8 +445,9 @@ get_ptnetmap(struct net_backend *be)
 {
 	struct netmap_priv *priv;
 
-	/* Check that this is a netmap backend. */
-	if (!be || be->set_cap != netmap_set_cap) {
+	/* Check that this is a ptnetmap backend. */
+	if (!be || be->set_cap != netmap_set_cap ||
+			!(priv->nmd->req.nr_flags & NR_PTNETMAP_HOST)) {
 		return NULL;
 	}
 
@@ -613,11 +614,11 @@ netmap_init(struct net_backend *be, const char *devname,
 		goto err;
 	}
 
+	priv->ptnetmap.netmap_priv = priv;
+	priv->ptnetmap.features = NET_PTN_FEATURES_BASE;
+	priv->ptnetmap.acked_features = 0;
+	priv->ptnetmap.running = 0;
 	if (ptnetmap) {
-		priv->ptnetmap.netmap_priv = priv;
-		priv->ptnetmap.features = NET_PTN_FEATURES_BASE;
-		priv->ptnetmap.acked_features = 0;
-		priv->ptnetmap.running = 0;
 		if (netmap_has_vnet_hdr_len(be, VNET_HDR_LEN)) {
 			priv->ptnetmap.features |= NET_PTN_FEATURES_VNET_HDR;
 		}
