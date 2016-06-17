@@ -552,28 +552,34 @@ ptnetmap_delete(struct ptnetmap_state *ptn)
 	return 0;
 }
 
-/* Used by netmap at initialization time. */
 static int
-netmap_common_init(struct net_backend *be, struct netmap_priv *priv,
-		   uint32_t nr_flags, const char *devname,
-		   net_backend_cb_t cb, void *param)
+netmap_init(struct net_backend *be, const char *devname,
+	    net_backend_cb_t cb, void *param)
 {
 	const char *ndname = "/dev/netmap";
+	struct netmap_priv *priv = NULL;
 	struct nmreq req;
-	char tname[40];
+	int ptnetmap = 0;
+
+	priv = calloc(1, sizeof(struct netmap_priv));
+	if (priv == NULL) {
+		WPRINTF(("Unable alloc netmap private data\n"));
+		return -1;
+	}
 
 	strncpy(priv->ifname, devname, sizeof(priv->ifname));
 	priv->ifname[sizeof(priv->ifname) - 1] = '\0';
 
 	memset(&req, 0, sizeof(req));
-	req.nr_flags = nr_flags;
+	req.nr_flags = ptnetmap ? NR_PTNETMAP_HOST : 0;
 
 	priv->nmd = nm_open(priv->ifname, &req, NETMAP_NO_TX_POLL, NULL);
 	if (priv->nmd == NULL) {
 		WPRINTF(("Unable to nm_open(): device '%s', "
 				"interface '%s', errno (%s)\n",
 				ndname, devname, strerror(errno)));
-		goto err_open;
+		free(priv);
+		return -1;
 	}
 
 	priv->tx = NETMAP_TXRING(priv->nmd->nifp, 0);
@@ -584,36 +590,6 @@ netmap_common_init(struct net_backend *be, struct netmap_priv *priv,
 	priv->rx_continue = 0;
 
 	be->fd = priv->nmd->fd;
-
-	/* Create a thread for netmap poll. */
-	pthread_create(&priv->evloop_tid, NULL, netmap_evloop_thread, (void *)be);
-	snprintf(tname, sizeof(tname), "netmap-evloop-%p", priv);
-	pthread_set_name_np(priv->evloop_tid, tname);
-
-	return 0;
-
-err_open:
-	return -1;
-}
-
-static int
-netmap_init(struct net_backend *be, const char *devname,
-	    net_backend_cb_t cb, void *param)
-{
-	struct netmap_priv *priv = NULL;
-	int ptnetmap = 0;
-
-	priv = calloc(1, sizeof(struct netmap_priv));
-	if (priv == NULL) {
-		WPRINTF(("Unable alloc netmap private data\n"));
-		return -1;
-	}
-
-	if (netmap_common_init(be, priv, ptnetmap ? NR_PTNETMAP_HOST : 0,
-			       devname, cb, param)) {
-		goto err;
-	}
-
 	be->priv = priv;
 
 	priv->ptnetmap.netmap_priv = priv;
@@ -627,14 +603,16 @@ netmap_init(struct net_backend *be, const char *devname,
 		/* XXX Call ptn_memdev_attach() here or in get_ptnetmap ? */
 		ptn_memdev_attach(priv->nmd->mem, priv->nmd->memsize,
 				  priv->nmd->req.nr_arg2);
+	} else {
+		char tname[40];
+
+		/* Create a thread for netmap poll. */
+		pthread_create(&priv->evloop_tid, NULL, netmap_evloop_thread, (void *)be);
+		snprintf(tname, sizeof(tname), "netmap-evloop-%p", priv);
+		pthread_set_name_np(priv->evloop_tid, tname);
 	}
 
 	return 0;
-
-err:
-	free(priv);
-
-	return -1;
 }
 
 static void
