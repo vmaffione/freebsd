@@ -119,6 +119,7 @@ ptnet_regif(struct ptnet_softc *sc)
 
 	for (i = 0; i < sc->num_rings; i++, kick_addr += 4) {
 		struct msix_table_entry *mte;
+		void *cookie = ((void*)sc) + 4*i;
 
 		cfg->entries[i].irqfd = vm_get_fd(vmctx);
 		cfg->entries[i].ioctl.com = VM_LAPIC_MSI;
@@ -133,12 +134,12 @@ ptnet_regif(struct ptnet_softc *sc)
 		ret = vm_io_reg_handler(vmctx, kick_addr /* ioaddr */,
 					0 /* in */, 0 /* mask_data */,
 					0 /* data */, VM_IO_REGH_KWEVENTS,
-					(void *)sc + 4*i /* cookie */);
+					cookie /* cookie */);
 		if (ret) {
 			fprintf(stderr, "%s: vm_io_reg_handler %d\n",
 				__func__, ret);
 		}
-		cfg->entries[i].ioeventfd = (uint64_t) (sc + 4*i);
+		cfg->entries[i].ioeventfd = (uint64_t) cookie;
 	}
 
 	ret = ptnetmap_create(sc->ptbe, cfg);
