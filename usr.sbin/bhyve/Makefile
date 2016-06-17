@@ -23,6 +23,7 @@ SRCS=	\
 	mevent.c		\
 	mptbl.c			\
 	net_backends.c		\
+	net_utils.c		\
 	pci_ahci.c		\
 	pci_emul.c		\
 	pci_hostbridge.c	\
