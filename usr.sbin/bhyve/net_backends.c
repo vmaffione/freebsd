@@ -210,6 +210,11 @@ tap_init(struct net_backend *be, const char *devname,
 	int opt = 1;
 	struct tap_priv *priv;
 
+	if (cb == NULL) {
+		WPRINTF(("TAP backend requires non-NULL callback\n"));
+		return -1;
+	}
+
 	priv = calloc(1, sizeof(struct tap_priv));
 	if (priv == NULL) {
 		WPRINTF(("tap_priv alloc failed\n"));
@@ -559,7 +564,7 @@ netmap_init(struct net_backend *be, const char *devname,
 	const char *ndname = "/dev/netmap";
 	struct netmap_priv *priv = NULL;
 	struct nmreq req;
-	int ptnetmap = 0;
+	int ptnetmap = (cb == NULL);
 
 	priv = calloc(1, sizeof(struct netmap_priv));
 	if (priv == NULL) {

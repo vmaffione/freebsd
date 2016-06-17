@@ -340,7 +340,8 @@ ptnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		net_genmac(pi, macaddr);
 	}
 
-	/* Initialize backend. */
+	/* Initialize backend. A NULL callback is used here to tell
+	 * the ask the netmap backend to use ptnetmap. */
 	sc->be = netbe_init(devname, NULL, sc);
 	if (!sc->be) {
 		fprintf(stderr, "net backend initialization failed\n");
