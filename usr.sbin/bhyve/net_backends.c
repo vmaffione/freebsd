@@ -659,81 +659,81 @@ pkt_copy(const void *_src, void *_dst, int l)
 
 static int
 netmap_send(struct net_backend *be, struct iovec *iov,
-			int iovcnt, int size, int more)
+	    int iovcnt, int size, int more)
 {
 	struct netmap_priv *priv = be->priv;
 	struct netmap_ring *ring;
-	uint32_t last;
-	uint32_t idx;
-	uint8_t *dst;
+	int nm_buf_size;
+	int nm_buf_len;
+	uint32_t head;
+	void *nm_buf;
 	int j;
-	uint32_t i;
 
-	if (iovcnt <= 0)
-		goto txsync;
+	if (iovcnt <= 0 || size <= 0) {
+		D("Wrong iov: iovcnt %d size %d", iovcnt, size);
+		return 0;
+	}
 
 	ring = priv->tx;
-	last = i = ring->cur;
-
-	if (nm_ring_space(ring) < iovcnt) {
-		static int c;
-		c++;
-		RD(5, "no space, txsync %d", c);
-		/* Not enough netmap slots. */
+	head = ring->head;
+	if (head == ring->tail) {
+		RD(1, "No space, drop %d bytes", size);
 		goto txsync;
 	}
+	nm_buf = NETMAP_BUF(ring, ring->slot[head].buf_idx);
+	nm_buf_size = ring->nr_buf_size;
+	nm_buf_len = 0;
 
 	for (j = 0; j < iovcnt; j++) {
 		int iov_frag_size = iov[j].iov_len;
-		int offset = 0;
-		int nm_frag_size;
+		void *iov_frag_buf = iov[j].iov_base;
 
 		/* Split each iovec fragment over more netmap slots, if
-		   necessary (without performing data copy). */
-		while (iov_frag_size) {
-			nm_frag_size = iov_frag_size;
-			if (nm_frag_size > ring->nr_buf_size) {
-				nm_frag_size = ring->nr_buf_size;
+		   necessary. */
+		for (;;) {
+			int copylen;
+
+			copylen = iov_frag_size < nm_buf_size ? iov_frag_size : nm_buf_size;
+			pkt_copy(iov_frag_buf, nm_buf, copylen);
+
+			iov_frag_buf += copylen;
+			iov_frag_size -= copylen;
+			nm_buf += copylen;
+			nm_buf_size -= copylen;
+			nm_buf_len += copylen;
+
+			if (iov_frag_size == 0) {
+				break;
 			}
 
-			if (nm_ring_empty(ring)) {
-				/* We run out of netmap slots while splitting the
-				   iovec fragments. */
+			ring->slot[head].len = nm_buf_len;
+			ring->slot[head].flags = NS_MOREFRAG;
+			head = nm_ring_next(ring, head);
+			if (head == ring->tail) {
+				/* We ran out of netmap slots while
+				 * splitting the iovec fragments. */
+				RD(1, "No space, drop %d bytes", size);
 				goto txsync;
 			}
-
-			idx = ring->slot[i].buf_idx;
-			dst = (uint8_t *)NETMAP_BUF(ring, idx);
-
-			ring->slot[i].len = nm_frag_size;
-// #define USE_INDIRECT_BUFFERS
-#ifdef USE_INDIRECT_BUFFERS
-			ring->slot[i].flags = NS_MOREFRAG | NS_INDIRECT;
-			ring->slot[i].ptr = (uintptr_t)(iov[j].iov_base + offset);
-#else	/* !USE_INDIRECT_BUFFERS */
-			ring->slot[i].flags = NS_MOREFRAG;
-			pkt_copy(iov[j].iov_base + offset, dst, nm_frag_size);
-#endif	/* !USING_INDIRECT_BUFFERS */
-
-			last = i;
-			i = nm_ring_next(ring, i);
-
-			offset += nm_frag_size;
-			iov_frag_size -= nm_frag_size;
+			nm_buf = NETMAP_BUF(ring, ring->slot[head].buf_idx);
+			nm_buf_size = ring->nr_buf_size;
+			nm_buf_len = 0;
 		}
 	}
-	/* The last slot must not have NS_MOREFRAG set. */
-	ring->slot[last].flags &= ~NS_MOREFRAG;
 
-	/* Now update ring->cur and ring->avail. */
-	ring->cur = ring->head = i;
+	/* Complete the last slot, which must not have NS_MOREFRAG set. */
+	ring->slot[head].len = nm_buf_len;
+	ring->slot[head].flags = 0;
+	head = nm_ring_next(ring, head);
 
-txsync:
-	if (!more) {// || nm_ring_space(ring) < 64) {
-		// IFRATE(vq->vq_vs->rate.cur.var2[vq->vq_num]++);
-		// netmap_ioctl_counter++;
-		ioctl(be->fd, NIOCTXSYNC, NULL);
+	/* Now update ring->head and ring->cur. */
+	ring->head = ring->cur = head;
+
+	if (more) {// && nm_ring_space(ring) > 64
+		return 0;
 	}
+txsync:
+	ioctl(be->fd, NIOCTXSYNC, NULL);
 
 	return 0;
 }
