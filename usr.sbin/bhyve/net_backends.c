@@ -341,14 +341,6 @@ struct netmap_priv {
 	net_backend_cb_t cb;
 	void *cb_param;
 
-	/* Support for splitted receives. */
-	int rx_continue;
-	int rx_idx;
-	uint8_t *rx_buf;
-	int rx_avail;
-	int rx_morefrag;
-	int rx_avail_slots;
-
 	struct ptnetmap_state ptnetmap;
 };
 
@@ -588,7 +580,6 @@ netmap_init(struct net_backend *be, const char *devname,
 
 	priv->cb = cb;
 	priv->cb_param = param;
-	priv->rx_continue = 0;
 
 	be->fd = priv->nmd->fd;
 	be->priv = priv;
