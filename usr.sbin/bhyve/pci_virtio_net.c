@@ -209,11 +209,10 @@ pci_vtnet_rx_discard(struct pci_vtnet_softc *sc, struct iovec *iov)
 	 * We only make it large enough for TSO-sized segment.
 	 */
 	static uint8_t dummybuf[65536+64];
-	int more;
 
 	iov[0].iov_base = dummybuf;
 	iov[0].iov_len = sizeof(dummybuf);
-	netbe_recv(sc->vsc_be, iov, 1, &more);
+	netbe_recv(sc->vsc_be, iov, 1);
 }
 
 static void
@@ -223,7 +222,6 @@ pci_vtnet_rx(struct pci_vtnet_softc *sc)
 	struct vqueue_info *vq;
 	int len, n;
 	uint16_t idx;
-	int more;
 
 	/*
 	 * But, will be called when the rx ring hasn't yet
@@ -258,7 +256,7 @@ pci_vtnet_rx(struct pci_vtnet_softc *sc)
 		n = vq_getchain(vq, &idx, iov, VTNET_MAXSEGS, NULL);
 		assert(n >= 1 && n <= VTNET_MAXSEGS);
 
-		len = netbe_recv(sc->vsc_be, iov, n, &more);
+		len = netbe_recv(sc->vsc_be, iov, n);
 
 		if (len == 0) {
 			/*
