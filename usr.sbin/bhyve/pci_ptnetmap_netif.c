@@ -128,8 +128,9 @@ ptnet_regif(struct ptnet_softc *sc)
 		cfg->entries[i].ioctl.data.msix.msg = mte->msg_data;
 
 		fprintf(stderr, "%s: vector %u, addr %lu, data %u, "
-				"kick_addr %u\n",
-			__func__, i, mte->addr, mte->msg_data, kick_addr);
+				"kick_addr %u, cookie: %p\n",
+			__func__, i, mte->addr, mte->msg_data, kick_addr,
+			cookie);
 
 		ret = vm_io_reg_handler(vmctx, kick_addr /* ioaddr */,
 					0 /* in */, 0 /* mask_data */,
