@@ -29,7 +29,7 @@
 
 #include <stdint.h>
 #include <net/netmap.h>
-#include <dev/netmap/netmap_virt.h>
+#include <net/netmap_virt.h>
 #include "mevent.h"
 
 extern int netmap_ioctl_counter;

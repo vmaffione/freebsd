@@ -35,7 +35,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>	/* IFNAMSIZ */
 #include <net/netmap.h>
-#include <dev/netmap/netmap_virt.h>
+#include <net/netmap_virt.h>
 
 #include <sys/ioctl.h>
 #include <sys/param.h>
@@ -173,21 +173,21 @@ ptnet_ptctl(struct ptnet_softc *sc, uint64_t cmd)
 	int ret = EINVAL;
 
 	switch (cmd) {
-	case NET_PARAVIRT_PTCTL_CONFIG:
+	case PTNETMAP_PTCTL_CONFIG:
 		fprintf(stderr, "Ignoring deprecated CONFIG PTCTL\n");
 		break;
 
-	case NET_PARAVIRT_PTCTL_REGIF:
+	case PTNETMAP_PTCTL_REGIF:
 		/* Emulate a REGIF for the guest. */
 		ret = ptnet_regif(sc);
 		break;
 
-	case NET_PARAVIRT_PTCTL_UNREGIF:
+	case PTNETMAP_PTCTL_UNREGIF:
 		/* Emulate an UNREGIF for the guest. */
 		ret = ptnet_unregif(sc);
 		break;
 
-	case NET_PARAVIRT_PTCTL_HOSTMEMID:
+	case PTNETMAP_PTCTL_HOSTMEMID:
 		ret = ptnetmap_get_hostmemid(sc->ptbe);
 		break;
 
