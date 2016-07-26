@@ -487,7 +487,7 @@ ptnetmap_create(struct ptnetmap_state *ptn, struct ptnetmap_cfg *cfg)
 	struct nmreq req;
 	int err;
 
-	if (!(ptn->acked_features & NET_PTN_FEATURES_BASE)) {
+	if (!(ptn->acked_features & PTNETMAP_F_BASE)) {
 		fprintf(stderr, "%s: ptnetmap features not acked\n",
 			__func__);
 		return EINVAL;
@@ -585,12 +585,12 @@ netmap_init(struct net_backend *be, const char *devname,
 	be->priv = priv;
 
 	priv->ptnetmap.netmap_priv = priv;
-	priv->ptnetmap.features = NET_PTN_FEATURES_BASE;
+	priv->ptnetmap.features = PTNETMAP_F_BASE;
 	priv->ptnetmap.acked_features = 0;
 	priv->ptnetmap.running = 0;
 	if (ptnetmap) {
 		if (netmap_has_vnet_hdr_len(be, VNET_HDR_LEN)) {
-			priv->ptnetmap.features |= NET_PTN_FEATURES_VNET_HDR;
+			priv->ptnetmap.features |= PTNETMAP_F_VNET_HDR;
 		}
 		/* XXX Call ptn_memdev_attach() here or in get_ptnetmap ? */
 		ptn_memdev_attach(priv->nmd->mem, priv->nmd->memsize,

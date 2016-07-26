@@ -34,7 +34,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>	/* IFNAMSIZ */
 #include <net/netmap.h>
-#include <dev/netmap/netmap_virt.h>
+#include <net/netmap_virt.h>
 
 #include <machine/vmm.h>
 #include <vmmapi.h>
@@ -311,7 +311,7 @@ err:
 }
 
 struct pci_devemu pci_de_ptnetmap = {
-	.pe_emu = 	PTN_MEMDEV_NAME,
+	.pe_emu = 	PTNETMAP_MEMDEV_NAME,
 	.pe_init =	ptn_memdev_init,
 	.pe_barwrite =	ptn_pci_write,
 	.pe_barread =	ptn_pci_read
