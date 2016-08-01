@@ -99,17 +99,15 @@ inout_instruction(struct vm_exit *vmexit)
 
 #ifdef VMM_IOPORT_REG_HANDLER
 #include <sys/kernel.h>
+#include <sys/param.h>
 #include <sys/lock.h>
+#include <sys/sx.h>
 #include <sys/malloc.h>
-#include <sys/mutex.h>
 #include <sys/systm.h>
 
 static MALLOC_DEFINE(M_IOREGH, "ioregh", "bhyve ioport reg handlers");
 
-#define IOREGH_LOCK(ioregh)	mtx_lock_spin(&((ioregh)->mtx))
-#define IOREGH_UNLOCK(ioregh)	mtx_unlock_spin(&((ioregh)->mtx))
-
-#define IOPORT_MAX_REG_HANDLER	12
+#define IOPORT_MAX_REG_HANDLER	16
 
 /*
  * ioport_reg_handler functions allows us to to catch VM write/read
@@ -134,8 +132,8 @@ struct ioport_reg_handler {
 };
 
 struct ioregh {
-	struct mtx mtx;
-	/* TODO: use hash table is better */
+	struct sx lock;
+	/* TODO: use hash table */
 	struct ioport_reg_handler handlers[IOPORT_MAX_REG_HANDLER];
 };
 
@@ -161,7 +159,7 @@ vmm_ioport_reg_wakeup(struct vm *vm, struct ioport_reg_handler *regh, uint32_t *
  * - VM_IO_REGH_IOCTL:		ioctl on fd
  */
 
-/* call with ioregh->mtx held */
+/* call with ioregh->lock held */
 static struct ioport_reg_handler *
 vmm_ioport_find_handler(struct ioregh *ioregh, uint16_t port, uint16_t in,
 		uint32_t mask_data, uint32_t data)
@@ -184,7 +182,7 @@ vmm_ioport_find_handler(struct ioregh *ioregh, uint16_t port, uint16_t in,
 	return (NULL);
 }
 
-/* call with ioregh->mtx held */
+/* call with ioregh->lock held */
 static struct ioport_reg_handler *
 vmm_ioport_empty_handler(struct ioregh *ioregh)
 {
@@ -212,7 +210,7 @@ vmm_ioport_add_handler(struct vm *vm, uint16_t port, uint16_t in, uint32_t mask_
 
 	ioregh = vm_ioregh(vm);
 
-	IOREGH_LOCK(ioregh);
+	sx_xlock(&ioregh->lock);
 
 	regh = vmm_ioport_find_handler(ioregh, port, in, mask_data, data);
 	if (regh != NULL) {
@@ -238,7 +236,7 @@ vmm_ioport_add_handler(struct vm *vm, uint16_t port, uint16_t in, uint32_t mask_
 	regh->handler_arg = handler_arg;
 
 err:
-	IOREGH_UNLOCK(ioregh);
+	sx_xunlock(&ioregh->lock);
 	return (ret);
 }
 
@@ -252,7 +250,7 @@ vmm_ioport_del_handler(struct vm *vm, uint16_t port, uint16_t in,
 
 	ioregh = vm_ioregh(vm);
 
-	IOREGH_LOCK(ioregh);
+	sx_xlock(&ioregh->lock);
 
 	regh = vmm_ioport_find_handler(ioregh, port, in, mask_data, data);
 
@@ -263,7 +261,7 @@ vmm_ioport_del_handler(struct vm *vm, uint16_t port, uint16_t in,
 
 	bzero(regh, sizeof(struct ioport_reg_handler));
 err:
-	IOREGH_UNLOCK(ioregh);
+	sx_xunlock(&ioregh->lock);
 	return (ret);
 }
 
@@ -298,7 +296,7 @@ vmm_ioport_reg_handler(struct vm *vm, uint16_t port, uint16_t in,
  */
 static int
 invoke_reg_handler(struct vm *vm, int vcpuid, struct vm_exit *vmexit,
-	uint32_t *val, int *error)
+		   uint32_t *val, int *error)
 {
 	struct ioport_reg_handler *regh;
 	struct ioregh *ioregh;
@@ -307,16 +305,14 @@ invoke_reg_handler(struct vm *vm, int vcpuid, struct vm_exit *vmexit,
 	mask_data = vie_size2mask(vmexit->u.inout.bytes);
 	ioregh = vm_ioregh(vm);
 
-	IOREGH_LOCK(ioregh);
+	sx_slock(&ioregh->lock);
 	regh = vmm_ioport_find_handler(ioregh, vmexit->u.inout.port,
 			vmexit->u.inout.in, mask_data, vmexit->u.inout.eax);
-	if (regh == NULL) {
-		IOREGH_UNLOCK(ioregh);
-		return (0);
+	if (regh != NULL) {
+		*error = (*(regh->handler))(vm, regh, val);
 	}
-	*error = (*(regh->handler))(vm, regh, val);
-	IOREGH_UNLOCK(ioregh);
-	return (1);
+	sx_sunlock(&ioregh->lock);
+	return (regh != NULL);
 }
 
 struct ioregh *
@@ -325,8 +321,7 @@ ioregh_init(struct vm *vm)
 	struct ioregh *ioregh;
 
 	ioregh = malloc(sizeof(struct ioregh), M_IOREGH, M_WAITOK | M_ZERO);
-
-	mtx_init(&ioregh->mtx, "ioregh lock", NULL, MTX_SPIN);
+	sx_init(&ioregh->lock, "ioregh lock");
 
 	return (ioregh);
 }
@@ -334,6 +329,7 @@ ioregh_init(struct vm *vm)
 void
 ioregh_cleanup(struct ioregh *ioregh)
 {
+	sx_destroy(&ioregh->lock);
 	free(ioregh, M_IOREGH);
 }
 #else /* !VMM_IOPORT_REG_HANDLER */
