@@ -66,6 +66,7 @@ __FBSDID("$FreeBSD$");
 #include "vmm_ktr.h"
 #include "vmm_host.h"
 #include "vmm_mem.h"
+#include "vmm_usermem.h"
 #include "vmm_util.h"
 #include "vatpic.h"
 #include "vatpit.h"
@@ -148,6 +149,7 @@ struct vm {
 	struct vatpit	*vatpit;		/* (i) virtual atpit */
 	struct vpmtmr	*vpmtmr;		/* (i) virtual ACPI PM timer */
 	struct vrtc	*vrtc;			/* (o) virtual RTC */
+	struct ioregh	*ioregh;		/* () I/O reg handler */
 	volatile cpuset_t active_cpus;		/* (i) active vcpus */
 	int		suspend;		/* (i) stop VM execution */
 	volatile cpuset_t suspended_cpus; 	/* (i) suspended vcpus */
@@ -419,6 +421,7 @@ vm_init(struct vm *vm, bool create)
 	vm->vpmtmr = vpmtmr_init(vm);
 	if (create)
 		vm->vrtc = vrtc_init(vm);
+	vm->ioregh = ioregh_init(vm);
 
 	CPU_ZERO(&vm->active_cpus);
 
@@ -475,11 +478,13 @@ vm_cleanup(struct vm *vm, bool destroy)
 		vrtc_cleanup(vm->vrtc);
 	else
 		vrtc_reset(vm->vrtc);
+	ioregh_cleanup(vm->ioregh);
 	vpmtmr_cleanup(vm->vpmtmr);
 	vatpit_cleanup(vm->vatpit);
 	vhpet_cleanup(vm->vhpet);
 	vatpic_cleanup(vm->vatpic);
 	vioapic_cleanup(vm->vioapic);
+	vmm_usermem_cleanup(vm->vmspace);
 
 	for (i = 0; i < VM_MAXCPU; i++)
 		vcpu_cleanup(vm, i, destroy);
@@ -553,6 +558,17 @@ vm_map_mmio(struct vm *vm, vm_paddr_t gpa, size_t len, vm_paddr_t hpa)
 }
 
 int
+vm_map_usermem(struct vm *vm, vm_paddr_t gpa, size_t len, void *buf, struct thread *td)
+{
+	vm_object_t obj;
+
+	if ((obj = vmm_usermem_alloc(vm->vmspace, gpa, len, buf, td)) == NULL)
+		return (ENOMEM);
+
+	return (0);
+}
+
+int
 vm_unmap_mmio(struct vm *vm, vm_paddr_t gpa, size_t len)
 {
 
@@ -587,6 +603,9 @@ vm_mem_allocated(struct vm *vm, int vcpuid, vm_paddr_t gpa)
 
 	if (ppt_is_mmio(vm, gpa))
 		return (true);			/* 'gpa' is pci passthru mmio */
+
+	if (usermem_mapped(vm->vmspace, gpa))
+		return (true);			/* 'gpa' is user-space buffer mapped */
 
 	return (false);
 }
@@ -2455,6 +2474,12 @@ vm_rtc(struct vm *vm)
 {
 
 	return (vm->vrtc);
+}
+
+struct ioregh *
+vm_ioregh(struct vm *vm)
+{
+	return (vm->ioregh);
 }
 
 enum vm_reg_name

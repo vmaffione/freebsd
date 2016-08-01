@@ -97,31 +97,278 @@ inout_instruction(struct vm_exit *vmexit)
 }
 #endif	/* KTR */
 
+#ifdef VMM_IOPORT_REG_HANDLER
+#include <sys/kernel.h>
+#include <sys/lock.h>
+#include <sys/malloc.h>
+#include <sys/mutex.h>
+#include <sys/systm.h>
+
+static MALLOC_DEFINE(M_IOREGH, "ioregh", "bhyve ioport reg handlers");
+
+#define IOREGH_LOCK(ioregh)	mtx_lock_spin(&((ioregh)->mtx))
+#define IOREGH_UNLOCK(ioregh)	mtx_unlock_spin(&((ioregh)->mtx))
+
+#define IOPORT_MAX_REG_HANDLER	12
+
+/*
+ * ioport_reg_handler functions allows us to to catch VM write/read
+ * on specific I/O address and send notification.
+ *
+ * When the VM writes or reads a specific value on I/O address, if the address
+ * and the value matches with the info stored durign the handler registration,
+ * then we send a notification (we can have multiple type of notification,
+ * but for now is implemented only the VM_IO_REGH_KWEVENTS handler.
+ */
+
+typedef int (*ioport_reg_handler_func_t)(struct vm *vm,
+		struct ioport_reg_handler *regh, uint32_t *val);
+
+struct ioport_reg_handler {
+	uint16_t port;				/* I/O address */
+	uint16_t in;				/* 0 out, 1 in */
+	uint32_t mask_data;			/* 0 means match anything */
+	uint32_t data;				/* data to match */
+	ioport_reg_handler_func_t handler;	/* handler pointer */
+	void *handler_arg;			/* handler argument */
+};
+
+struct ioregh {
+	struct mtx mtx;
+	/* TODO: use hash table is better */
+	struct ioport_reg_handler handlers[IOPORT_MAX_REG_HANDLER];
+};
+
+/* ----- I/O reg handlers ----- */
+
+/*
+ * VM_IO_REGH_KWEVENTS handler
+ *
+ * wakeup() on specified address that uniquely identifies the event
+ *
+ */
+static int
+vmm_ioport_reg_wakeup(struct vm *vm, struct ioport_reg_handler *regh, uint32_t *val)
+{
+	wakeup(regh->handler_arg);
+	return (0);
+}
+
+/*
+ * TODO:
+ * - VM_IO_REGH_CONDSIGNAL:	pthread_cond_signal
+ * - VM_IO_REGH_WRITEFD:	write on fd
+ * - VM_IO_REGH_IOCTL:		ioctl on fd
+ */
+
+/* call with ioregh->mtx held */
+static struct ioport_reg_handler *
+vmm_ioport_find_handler(struct ioregh *ioregh, uint16_t port, uint16_t in,
+		uint32_t mask_data, uint32_t data)
+{
+	struct ioport_reg_handler *regh;
+	uint32_t mask;
+	int i;
+
+	regh = ioregh->handlers;
+	for (i = 0; i < IOPORT_MAX_REG_HANDLER; i++) {
+		if (regh[i].handler != NULL) {
+			mask = regh[i].mask_data & mask_data;
+			if ((regh[i].port == port) && (regh[i].in == in)
+				&& ((mask & regh[i].data) == (mask & data))) {
+				return &regh[i];
+			}
+		}
+	}
+
+	return (NULL);
+}
+
+/* call with ioregh->mtx held */
+static struct ioport_reg_handler *
+vmm_ioport_empty_handler(struct ioregh *ioregh)
+{
+	struct ioport_reg_handler *regh;
+	int i;
+
+	regh = ioregh->handlers;
+	for (i = 0; i < IOPORT_MAX_REG_HANDLER; i++) {
+		if (regh[i].handler == NULL) {
+			return &regh[i];
+		}
+	}
+
+	return (NULL);
+}
+
+
+static int
+vmm_ioport_add_handler(struct vm *vm, uint16_t port, uint16_t in, uint32_t mask_data,
+	uint32_t data, ioport_reg_handler_func_t handler, void *handler_arg)
+{
+	struct ioport_reg_handler *regh;
+	struct ioregh *ioregh;
+	int ret = 0;
+
+	ioregh = vm_ioregh(vm);
+
+	IOREGH_LOCK(ioregh);
+
+	regh = vmm_ioport_find_handler(ioregh, port, in, mask_data, data);
+	if (regh != NULL) {
+		printf("%s: handler for port %d in %d mask_data %d data %d \
+				already registered\n",
+				__FUNCTION__, port, in,  mask_data, data);
+		ret = EEXIST;
+		goto err;
+	}
+
+	regh = vmm_ioport_empty_handler(ioregh);
+	if (regh == NULL) {
+		printf("%s: empty reg_handler slot not found\n", __FUNCTION__);
+		ret = ENOMEM;
+		goto err;
+	}
+
+	regh->port = port;
+	regh->in = in;
+	regh->mask_data = mask_data;
+	regh->data = data;
+	regh->handler = handler;
+	regh->handler_arg = handler_arg;
+
+err:
+	IOREGH_UNLOCK(ioregh);
+	return (ret);
+}
+
+static int
+vmm_ioport_del_handler(struct vm *vm, uint16_t port, uint16_t in,
+	uint32_t mask_data, uint32_t data)
+{
+	struct ioport_reg_handler *regh;
+	struct ioregh *ioregh;
+	int ret = 0;
+
+	ioregh = vm_ioregh(vm);
+
+	IOREGH_LOCK(ioregh);
+
+	regh = vmm_ioport_find_handler(ioregh, port, in, mask_data, data);
+
+	if (regh == NULL) {
+		ret = EINVAL;
+		goto err;
+	}
+
+	bzero(regh, sizeof(struct ioport_reg_handler));
+err:
+	IOREGH_UNLOCK(ioregh);
+	return (ret);
+}
+
+/*
+ * register or delete a new I/O event handler.
+ */
+int
+vmm_ioport_reg_handler(struct vm *vm, uint16_t port, uint16_t in,
+	uint32_t mask_data, uint32_t data, enum vm_io_regh_type type, void *arg)
+{
+	int ret = 0;
+
+	switch (type) {
+	case VM_IO_REGH_DELETE:
+		ret = vmm_ioport_del_handler(vm, port, in, mask_data, data);
+		break;
+	case VM_IO_REGH_KWEVENTS:
+		ret = vmm_ioport_add_handler(vm, port, in, mask_data, data,
+				vmm_ioport_reg_wakeup, arg);
+		break;
+	default:
+		printf("%s: unknown reg_handler type\n", __FUNCTION__);
+		ret = EINVAL;
+		break;
+	}
+
+	return (ret);
+}
+
+/*
+ * Invoke an handler, if the data matches.
+ */
+static int
+invoke_reg_handler(struct vm *vm, int vcpuid, struct vm_exit *vmexit,
+	uint32_t *val, int *error)
+{
+	struct ioport_reg_handler *regh;
+	struct ioregh *ioregh;
+	uint32_t mask_data;
+
+	mask_data = vie_size2mask(vmexit->u.inout.bytes);
+	ioregh = vm_ioregh(vm);
+
+	IOREGH_LOCK(ioregh);
+	regh = vmm_ioport_find_handler(ioregh, vmexit->u.inout.port,
+			vmexit->u.inout.in, mask_data, vmexit->u.inout.eax);
+	if (regh == NULL) {
+		IOREGH_UNLOCK(ioregh);
+		return (0);
+	}
+	*error = (*(regh->handler))(vm, regh, val);
+	IOREGH_UNLOCK(ioregh);
+	return (1);
+}
+
+struct ioregh *
+ioregh_init(struct vm *vm)
+{
+	struct ioregh *ioregh;
+
+	ioregh = malloc(sizeof(struct ioregh), M_IOREGH, M_WAITOK | M_ZERO);
+
+	mtx_init(&ioregh->mtx, "ioregh lock", NULL, MTX_SPIN);
+
+	return (ioregh);
+}
+
+void
+ioregh_cleanup(struct ioregh *ioregh)
+{
+	free(ioregh, M_IOREGH);
+}
+#else /* !VMM_IOPORT_REG_HANDLER */
+#define invoke_reg_handler(_1, _2, _3, _4, _5) (0)
+#endif /* VMM_IOPORT_REG_HANDLER */
+
 static int
 emulate_inout_port(struct vm *vm, int vcpuid, struct vm_exit *vmexit,
     bool *retu)
 {
 	ioport_handler_func_t handler;
 	uint32_t mask, val;
-	int error;
+	int regh = 0, error = 0;
 
 	/*
 	 * If there is no handler for the I/O port then punt to userspace.
 	 */
-	if (vmexit->u.inout.port >= MAX_IOPORTS ||
-	    (handler = ioport_handler[vmexit->u.inout.port]) == NULL) {
+	if ((vmexit->u.inout.port >= MAX_IOPORTS ||
+	    (handler = ioport_handler[vmexit->u.inout.port]) == NULL) &&
+	    (regh = invoke_reg_handler(vm, vcpuid, vmexit, &val, &error)) == 0) {
 		*retu = true;
 		return (0);
 	}
 
-	mask = vie_size2mask(vmexit->u.inout.bytes);
+	if (!regh) {
+		mask = vie_size2mask(vmexit->u.inout.bytes);
 
-	if (!vmexit->u.inout.in) {
-		val = vmexit->u.inout.eax & mask;
+		if (!vmexit->u.inout.in) {
+			val = vmexit->u.inout.eax & mask;
+		}
+
+		error = (*handler)(vm, vcpuid, vmexit->u.inout.in,
+			vmexit->u.inout.port, vmexit->u.inout.bytes, &val);
 	}
 
-	error = (*handler)(vm, vcpuid, vmexit->u.inout.in,
-	    vmexit->u.inout.port, vmexit->u.inout.bytes, &val);
 	if (error) {
 		/*
 		 * The value returned by this function is also the return value
