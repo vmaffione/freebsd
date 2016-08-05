@@ -50,7 +50,6 @@ __FBSDID("$FreeBSD$");
 #include <strings.h>
 #include <unistd.h>
 #include <assert.h>
-#include <md5.h>
 #include <pthread.h>
 #include <pthread_np.h>
 
@@ -58,36 +57,16 @@ __FBSDID("$FreeBSD$");
 #include "pci_emul.h"
 #include "mevent.h"
 #include "virtio.h"
+#include "net_utils.h"
+#include "net_backends.h"
 
 #define VTNET_RINGSZ	1024
 
 #define VTNET_MAXSEGS	256
 
-/*
- * Host capabilities.  Note that we only offer a few of these.
- */
-#define	VIRTIO_NET_F_CSUM	(1 <<  0) /* host handles partial cksum */
-#define	VIRTIO_NET_F_GUEST_CSUM	(1 <<  1) /* guest handles partial cksum */
-#define	VIRTIO_NET_F_MAC	(1 <<  5) /* host supplies MAC */
-#define	VIRTIO_NET_F_GSO_DEPREC	(1 <<  6) /* deprecated: host handles GSO */
-#define	VIRTIO_NET_F_GUEST_TSO4	(1 <<  7) /* guest can rcv TSOv4 */
-#define	VIRTIO_NET_F_GUEST_TSO6	(1 <<  8) /* guest can rcv TSOv6 */
-#define	VIRTIO_NET_F_GUEST_ECN	(1 <<  9) /* guest can rcv TSO with ECN */
-#define	VIRTIO_NET_F_GUEST_UFO	(1 << 10) /* guest can rcv UFO */
-#define	VIRTIO_NET_F_HOST_TSO4	(1 << 11) /* host can rcv TSOv4 */
-#define	VIRTIO_NET_F_HOST_TSO6	(1 << 12) /* host can rcv TSOv6 */
-#define	VIRTIO_NET_F_HOST_ECN	(1 << 13) /* host can rcv TSO with ECN */
-#define	VIRTIO_NET_F_HOST_UFO	(1 << 14) /* host can rcv UFO */
-#define	VIRTIO_NET_F_MRG_RXBUF	(1 << 15) /* host can merge RX buffers */
-#define	VIRTIO_NET_F_STATUS	(1 << 16) /* config status field available */
-#define	VIRTIO_NET_F_CTRL_VQ	(1 << 17) /* control channel available */
-#define	VIRTIO_NET_F_CTRL_RX	(1 << 18) /* control channel RX mode support */
-#define	VIRTIO_NET_F_CTRL_VLAN	(1 << 19) /* control channel VLAN filtering */
-#define	VIRTIO_NET_F_GUEST_ANNOUNCE \
-				(1 << 21) /* guest can send gratuitous pkts */
-
+/* Our capabilities: we don't support VIRTIO_NET_F_MRG_RXBUF at the moment. */
 #define VTNET_S_HOSTCAPS      \
-  ( VIRTIO_NET_F_MAC | VIRTIO_NET_F_MRG_RXBUF | VIRTIO_NET_F_STATUS | \
+  ( VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS | \
     VIRTIO_F_NOTIFY_ON_EMPTY | VIRTIO_RING_F_INDIRECT_DESC)
 
 /*
@@ -96,6 +75,7 @@ __FBSDID("$FreeBSD$");
 struct virtio_net_config {
 	uint8_t  mac[6];
 	uint16_t status;
+	uint16_t max_virtqueue_pairs;
 } __packed;
 
 /*
@@ -106,19 +86,6 @@ struct virtio_net_config {
 #define VTNET_CTLQ	2	/* NB: not yet supported */
 
 #define VTNET_MAXQ	3
-
-/*
- * Fixed network header size
- */
-struct virtio_net_rxhdr {
-	uint8_t		vrh_flags;
-	uint8_t		vrh_gso_type;
-	uint16_t	vrh_hdr_len;
-	uint16_t	vrh_gso_size;
-	uint16_t	vrh_csum_start;
-	uint16_t	vrh_csum_offset;
-	uint16_t	vrh_bufs;
-} __packed;
 
 /*
  * Debug printf
@@ -134,10 +101,8 @@ struct pci_vtnet_softc {
 	struct virtio_softc vsc_vs;
 	struct vqueue_info vsc_queues[VTNET_MAXQ - 1];
 	pthread_mutex_t vsc_mtx;
-	struct mevent	*vsc_mevp;
 
-	int		vsc_tapfd;
-	struct nm_desc	*vsc_nmd;
+	struct net_backend *vsc_be;
 
 	int		vsc_rx_ready;
 	volatile int	resetting;	/* set and checked outside lock */
@@ -147,7 +112,6 @@ struct pci_vtnet_softc {
 	struct virtio_net_config vsc_config;
 
 	pthread_mutex_t	rx_mtx;
-	int		rx_in_progress;
 	int		rx_vhdrlen;
 	int		rx_merge;	/* merged rx bufs in use */
 
@@ -155,10 +119,6 @@ struct pci_vtnet_softc {
 	pthread_mutex_t	tx_mtx;
 	pthread_cond_t	tx_cond;
 	int		tx_in_progress;
-
-	void (*pci_vtnet_rx)(struct pci_vtnet_softc *sc);
-	void (*pci_vtnet_tx)(struct pci_vtnet_softc *sc, struct iovec *iov,
-			     int iovcnt, int len);
 };
 
 static void pci_vtnet_reset(void *);
@@ -197,17 +157,13 @@ pci_vtnet_txwait(struct pci_vtnet_softc *sc)
 
 /*
  * If the receive thread is active then stall until it is done.
+ * It is enough to lock and unlock the RX mutex.
  */
 static void
 pci_vtnet_rxwait(struct pci_vtnet_softc *sc)
 {
 
 	pthread_mutex_lock(&sc->rx_mtx);
-	while (sc->rx_in_progress) {
-		pthread_mutex_unlock(&sc->rx_mtx);
-		usleep(10000);
-		pthread_mutex_lock(&sc->rx_mtx);
-	}
 	pthread_mutex_unlock(&sc->rx_mtx);
 }
 
@@ -238,73 +194,35 @@ pci_vtnet_reset(void *vsc)
 }
 
 /*
- * Called to send a buffer chain out to the tap device
- */
-static void
-pci_vtnet_tap_tx(struct pci_vtnet_softc *sc, struct iovec *iov, int iovcnt,
-		 int len)
-{
-	static char pad[60]; /* all zero bytes */
-
-	if (sc->vsc_tapfd == -1)
-		return;
-
-	/*
-	 * If the length is < 60, pad out to that and add the
-	 * extra zero'd segment to the iov. It is guaranteed that
-	 * there is always an extra iov available by the caller.
-	 */
-	if (len < 60) {
-		iov[iovcnt].iov_base = pad;
-		iov[iovcnt].iov_len = 60 - len;
-		iovcnt++;
-	}
-	(void) writev(sc->vsc_tapfd, iov, iovcnt);
-}
-
-/*
  *  Called when there is read activity on the tap file descriptor.
  * Each buffer posted by the guest is assumed to be able to contain
  * an entire ethernet frame + rx header.
  *  MP note: the dummybuf is only used for discarding frames, so there
  * is no need for it to be per-vtnet or locked.
  */
-static uint8_t dummybuf[2048];
 
-static __inline struct iovec *
-rx_iov_trim(struct iovec *iov, int *niov, int tlen)
+void
+pci_vtnet_rx_discard(struct pci_vtnet_softc *sc, struct iovec *iov)
 {
-	struct iovec *riov;
+	/*
+	 * MP note: the dummybuf is only used to discard frames,
+	 * so there is no need for it to be per-vtnet or locked.
+	 * We only make it large enough for TSO-sized segment.
+	 */
+	static uint8_t dummybuf[65536+64];
 
-	/* XXX short-cut: assume first segment is >= tlen */
-	assert(iov[0].iov_len >= tlen);
-
-	iov[0].iov_len -= tlen;
-	if (iov[0].iov_len == 0) {
-		assert(*niov > 1);
-		*niov -= 1;
-		riov = &iov[1];
-	} else {
-		iov[0].iov_base = (void *)((uintptr_t)iov[0].iov_base + tlen);
-		riov = &iov[0];
-	}
-
-	return (riov);
+	iov[0].iov_base = dummybuf;
+	iov[0].iov_len = sizeof(dummybuf);
+	netbe_recv(sc->vsc_be, iov, 1);
 }
 
 static void
-pci_vtnet_tap_rx(struct pci_vtnet_softc *sc)
+pci_vtnet_rx(struct pci_vtnet_softc *sc)
 {
-	struct iovec iov[VTNET_MAXSEGS], *riov;
+	struct iovec iov[VTNET_MAXSEGS + 1];
 	struct vqueue_info *vq;
-	void *vrx;
 	int len, n;
 	uint16_t idx;
-
-	/*
-	 * Should never be called without a valid tap fd
-	 */
-	assert(sc->vsc_tapfd != -1);
 
 	/*
 	 * But, will be called when the rx ring hasn't yet
@@ -314,7 +232,7 @@ pci_vtnet_tap_rx(struct pci_vtnet_softc *sc)
 		/*
 		 * Drop the packet and try later.
 		 */
-		(void) read(sc->vsc_tapfd, dummybuf, sizeof(dummybuf));
+		pci_vtnet_rx_discard(sc, iov);
 		return;
 	}
 
@@ -327,7 +245,7 @@ pci_vtnet_tap_rx(struct pci_vtnet_softc *sc)
 		 * Drop the packet and try later.  Interrupt on
 		 * empty, if that's negotiated.
 		 */
-		(void) read(sc->vsc_tapfd, dummybuf, sizeof(dummybuf));
+		pci_vtnet_rx_discard(sc, iov);
 		vq_endchains(vq, 1);
 		return;
 	}
@@ -339,16 +257,9 @@ pci_vtnet_tap_rx(struct pci_vtnet_softc *sc)
 		n = vq_getchain(vq, &idx, iov, VTNET_MAXSEGS, NULL);
 		assert(n >= 1 && n <= VTNET_MAXSEGS);
 
-		/*
-		 * Get a pointer to the rx header, and use the
-		 * data immediately following it for the packet buffer.
-		 */
-		vrx = iov[0].iov_base;
-		riov = rx_iov_trim(iov, &n, sc->rx_vhdrlen);
+		len = netbe_recv(sc->vsc_be, iov, n);
 
-		len = readv(sc->vsc_tapfd, riov, n);
-
-		if (len < 0 && errno == EWOULDBLOCK) {
+		if (len == 0) {
 			/*
 			 * No more packets, but still some avail ring
 			 * entries.  Interrupt if needed/appropriate.
@@ -356,213 +267,6 @@ pci_vtnet_tap_rx(struct pci_vtnet_softc *sc)
 			vq_retchain(vq);
 			vq_endchains(vq, 0);
 			return;
-		}
-
-		/*
-		 * The only valid field in the rx packet header is the
-		 * number of buffers if merged rx bufs were negotiated.
-		 */
-		memset(vrx, 0, sc->rx_vhdrlen);
-
-		if (sc->rx_merge) {
-			struct virtio_net_rxhdr *vrxh;
-
-			vrxh = vrx;
-			vrxh->vrh_bufs = 1;
-		}
-
-		/*
-		 * Release this chain and handle more chains.
-		 */
-		vq_relchain(vq, idx, len + sc->rx_vhdrlen);
-	} while (vq_has_descs(vq));
-
-	/* Interrupt if needed, including for NOTIFY_ON_EMPTY. */
-	vq_endchains(vq, 1);
-}
-
-static int
-pci_vtnet_netmap_writev(struct nm_desc *nmd, struct iovec *iov, int iovcnt)
-{
-	int r, i;
-	int len = 0;
-
-	for (r = nmd->cur_tx_ring; ; ) {
-		struct netmap_ring *ring = NETMAP_TXRING(nmd->nifp, r);
-		uint32_t cur, idx;
-		char *buf;
-
-		if (nm_ring_empty(ring)) {
-			r++;
-			if (r > nmd->last_tx_ring)
-				r = nmd->first_tx_ring;
-			if (r == nmd->cur_rx_ring)
-				break;
-			continue;
-		}
-		cur = ring->cur;
-		idx = ring->slot[cur].buf_idx;
-		buf = NETMAP_BUF(ring, idx);
-
-		for (i = 0; i < iovcnt; i++) {
-			memcpy(&buf[len], iov[i].iov_base, iov[i].iov_len);
-			len += iov[i].iov_len;
-		}
-		ring->slot[cur].len = len;
-		ring->head = ring->cur = nm_ring_next(ring, cur);
-		nmd->cur_tx_ring = r;
-		ioctl(nmd->fd, NIOCTXSYNC, NULL);
-		break;
-	}
-
-	return (len);
-}
-
-static inline int
-pci_vtnet_netmap_readv(struct nm_desc *nmd, struct iovec *iov, int iovcnt)
-{
-	int len = 0;
-	int i = 0;
-	int r;
-
-	for (r = nmd->cur_rx_ring; ; ) {
-		struct netmap_ring *ring = NETMAP_RXRING(nmd->nifp, r);
-		uint32_t cur, idx;
-		char *buf;
-		size_t left;
-
-		if (nm_ring_empty(ring)) {
-			r++;
-			if (r > nmd->last_rx_ring)
-				r = nmd->first_rx_ring;
-			if (r == nmd->cur_rx_ring)
-				break;
-			continue;
-		}
-		cur = ring->cur;
-		idx = ring->slot[cur].buf_idx;
-		buf = NETMAP_BUF(ring, idx);
-		left = ring->slot[cur].len;
-
-		for (i = 0; i < iovcnt && left > 0; i++) {
-			if (iov[i].iov_len > left)
-				iov[i].iov_len = left;
-			memcpy(iov[i].iov_base, &buf[len], iov[i].iov_len);
-			len += iov[i].iov_len;
-			left -= iov[i].iov_len;
-		}
-		ring->head = ring->cur = nm_ring_next(ring, cur);
-		nmd->cur_rx_ring = r;
-		ioctl(nmd->fd, NIOCRXSYNC, NULL);
-		break;
-	}
-	for (; i < iovcnt; i++)
-		iov[i].iov_len = 0;
-
-	return (len);
-}
-
-/*
- * Called to send a buffer chain out to the vale port
- */
-static void
-pci_vtnet_netmap_tx(struct pci_vtnet_softc *sc, struct iovec *iov, int iovcnt,
-		    int len)
-{
-	static char pad[60]; /* all zero bytes */
-
-	if (sc->vsc_nmd == NULL)
-		return;
-
-	/*
-	 * If the length is < 60, pad out to that and add the
-	 * extra zero'd segment to the iov. It is guaranteed that
-	 * there is always an extra iov available by the caller.
-	 */
-	if (len < 60) {
-		iov[iovcnt].iov_base = pad;
-		iov[iovcnt].iov_len = 60 - len;
-		iovcnt++;
-	}
-	(void) pci_vtnet_netmap_writev(sc->vsc_nmd, iov, iovcnt);
-}
-
-static void
-pci_vtnet_netmap_rx(struct pci_vtnet_softc *sc)
-{
-	struct iovec iov[VTNET_MAXSEGS], *riov;
-	struct vqueue_info *vq;
-	void *vrx;
-	int len, n;
-	uint16_t idx;
-
-	/*
-	 * Should never be called without a valid netmap descriptor
-	 */
-	assert(sc->vsc_nmd != NULL);
-
-	/*
-	 * But, will be called when the rx ring hasn't yet
-	 * been set up or the guest is resetting the device.
-	 */
-	if (!sc->vsc_rx_ready || sc->resetting) {
-		/*
-		 * Drop the packet and try later.
-		 */
-		(void) nm_nextpkt(sc->vsc_nmd, (void *)dummybuf);
-		return;
-	}
-
-	/*
-	 * Check for available rx buffers
-	 */
-	vq = &sc->vsc_queues[VTNET_RXQ];
-	if (!vq_has_descs(vq)) {
-		/*
-		 * Drop the packet and try later.  Interrupt on
-		 * empty, if that's negotiated.
-		 */
-		(void) nm_nextpkt(sc->vsc_nmd, (void *)dummybuf);
-		vq_endchains(vq, 1);
-		return;
-	}
-
-	do {
-		/*
-		 * Get descriptor chain.
-		 */
-		n = vq_getchain(vq, &idx, iov, VTNET_MAXSEGS, NULL);
-		assert(n >= 1 && n <= VTNET_MAXSEGS);
-
-		/*
-		 * Get a pointer to the rx header, and use the
-		 * data immediately following it for the packet buffer.
-		 */
-		vrx = iov[0].iov_base;
-		riov = rx_iov_trim(iov, &n, sc->rx_vhdrlen);
-
-		len = pci_vtnet_netmap_readv(sc->vsc_nmd, riov, n);
-
-		if (len == 0) {
-			/*
-			 * No more packets, but still some avail ring
-			 * entries.  Interrupt if needed/appropriate.
-			 */
-			vq_endchains(vq, 0);
-			return;
-		}
-
-		/*
-		 * The only valid field in the rx packet header is the
-		 * number of buffers if merged rx bufs were negotiated.
-		 */
-		memset(vrx, 0, sc->rx_vhdrlen);
-
-		if (sc->rx_merge) {
-			struct virtio_net_rxhdr *vrxh;
-
-			vrxh = vrx;
-			vrxh->vrh_bufs = 1;
 		}
 
 		/*
@@ -581,9 +285,7 @@ pci_vtnet_rx_callback(int fd, enum ev_type type, void *param)
 	struct pci_vtnet_softc *sc = param;
 
 	pthread_mutex_lock(&sc->rx_mtx);
-	sc->rx_in_progress = 1;
-	sc->pci_vtnet_rx(sc);
-	sc->rx_in_progress = 0;
+	pci_vtnet_rx(sc);
 	pthread_mutex_unlock(&sc->rx_mtx);
 
 }
@@ -607,28 +309,24 @@ pci_vtnet_proctx(struct pci_vtnet_softc *sc, struct vqueue_info *vq)
 {
 	struct iovec iov[VTNET_MAXSEGS + 1];
 	int i, n;
-	int plen, tlen;
+	int len;
 	uint16_t idx;
 
 	/*
-	 * Obtain chain of descriptors.  The first one is
-	 * really the header descriptor, so we need to sum
-	 * up two lengths: packet length and transfer length.
+	 * Obtain chain of descriptors. The first descriptor also
+	 * contains the virtio-net header.
 	 */
 	n = vq_getchain(vq, &idx, iov, VTNET_MAXSEGS, NULL);
 	assert(n >= 1 && n <= VTNET_MAXSEGS);
-	plen = 0;
-	tlen = iov[0].iov_len;
-	for (i = 1; i < n; i++) {
-		plen += iov[i].iov_len;
-		tlen += iov[i].iov_len;
+	len = 0;
+	for (i = 0; i < n; i++) {
+		len += iov[i].iov_len;
 	}
 
-	DPRINTF(("virtio: packet send, %d bytes, %d segs\n\r", plen, n));
-	sc->pci_vtnet_tx(sc, &iov[1], n - 1, plen);
+	netbe_send(sc->vsc_be, iov, n, len, 0 /* more */);
 
-	/* chain is processed, release it and set tlen */
-	vq_relchain(vq, idx, tlen);
+	/* chain is processed, release it and set len */
+	vq_relchain(vq, idx, len);
 }
 
 static void
@@ -714,107 +412,27 @@ pci_vtnet_ping_ctlq(void *vsc, struct vqueue_info *vq)
 #endif
 
 static int
-pci_vtnet_parsemac(char *mac_str, uint8_t *mac_addr)
-{
-        struct ether_addr *ea;
-        char *tmpstr;
-        char zero_addr[ETHER_ADDR_LEN] = { 0, 0, 0, 0, 0, 0 };
-
-        tmpstr = strsep(&mac_str,"=");
-       
-        if ((mac_str != NULL) && (!strcmp(tmpstr,"mac"))) {
-                ea = ether_aton(mac_str);
-
-                if (ea == NULL || ETHER_IS_MULTICAST(ea->octet) ||
-                    memcmp(ea->octet, zero_addr, ETHER_ADDR_LEN) == 0) {
-			fprintf(stderr, "Invalid MAC %s\n", mac_str);
-                        return (EINVAL);
-                } else
-                        memcpy(mac_addr, ea->octet, ETHER_ADDR_LEN);
-        }
-
-        return (0);
-}
-
-static void
-pci_vtnet_tap_setup(struct pci_vtnet_softc *sc, char *devname)
-{
-	char tbuf[80];
-
-	strcpy(tbuf, "/dev/");
-	strlcat(tbuf, devname, sizeof(tbuf));
-
-	sc->pci_vtnet_rx = pci_vtnet_tap_rx;
-	sc->pci_vtnet_tx = pci_vtnet_tap_tx;
-
-	sc->vsc_tapfd = open(tbuf, O_RDWR);
-	if (sc->vsc_tapfd == -1) {
-		WPRINTF(("open of tap device %s failed\n", tbuf));
-		return;
-	}
-
-	/*
-	 * Set non-blocking and register for read
-	 * notifications with the event loop
-	 */
-	int opt = 1;
-	if (ioctl(sc->vsc_tapfd, FIONBIO, &opt) < 0) {
-		WPRINTF(("tap device O_NONBLOCK failed\n"));
-		close(sc->vsc_tapfd);
-		sc->vsc_tapfd = -1;
-	}
-
-	sc->vsc_mevp = mevent_add(sc->vsc_tapfd,
-				  EVF_READ,
-				  pci_vtnet_rx_callback,
-				  sc);
-	if (sc->vsc_mevp == NULL) {
-		WPRINTF(("Could not register event\n"));
-		close(sc->vsc_tapfd);
-		sc->vsc_tapfd = -1;
-	}
-}
-
-static void
-pci_vtnet_netmap_setup(struct pci_vtnet_softc *sc, char *ifname)
-{
-	sc->pci_vtnet_rx = pci_vtnet_netmap_rx;
-	sc->pci_vtnet_tx = pci_vtnet_netmap_tx;
-
-	sc->vsc_nmd = nm_open(ifname, NULL, 0, 0);
-	if (sc->vsc_nmd == NULL) {
-		WPRINTF(("open of netmap device %s failed\n", ifname));
-		return;
-	}
-
-	sc->vsc_mevp = mevent_add(sc->vsc_nmd->fd,
-				  EVF_READ,
-				  pci_vtnet_rx_callback,
-				  sc);
-	if (sc->vsc_mevp == NULL) {
-		WPRINTF(("Could not register event\n"));
-		nm_close(sc->vsc_nmd);
-		sc->vsc_nmd = NULL;
-	}
-}
-
-static int
 pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 {
-	MD5_CTX mdctx;
-	unsigned char digest[16];
-	char nstr[80];
 	char tname[MAXCOMLEN + 1];
 	struct pci_vtnet_softc *sc;
 	char *devname;
 	char *vtopts;
 	int mac_provided;
+	struct virtio_consts *vc;
 
-	sc = calloc(1, sizeof(struct pci_vtnet_softc));
+	/* sc also contains a copy of the vtnet_vi_consts,
+	 * because the capabilities change depending on
+	 * the backend.
+	 */
+	sc = calloc(1, sizeof(struct pci_vtnet_softc) +
+			sizeof(struct virtio_consts));
+	vc = (struct virtio_consts *)(sc + 1);
+	memcpy(vc, &vtnet_vi_consts, sizeof(*vc));
 
 	pthread_mutex_init(&sc->vsc_mtx, NULL);
 
-	vi_softc_linkup(&sc->vsc_vs, &vtnet_vi_consts, sc, pi, sc->vsc_queues);
+	vi_softc_linkup(&sc->vsc_vs, vc, sc, pi, sc->vsc_queues);
 	sc->vsc_vs.vs_mtx = &sc->vsc_mtx;
 
 	sc->vsc_queues[VTNET_RXQ].vq_qsize = VTNET_RINGSZ;
@@ -827,12 +445,10 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 #endif
  
 	/*
-	 * Attempt to open the tap device and read the MAC address
+	 * Attempt to open the backend device and read the MAC address
 	 * if specified
 	 */
 	mac_provided = 0;
-	sc->vsc_tapfd = -1;
-	sc->vsc_nmd = NULL;
 	if (opts != NULL) {
 		int err;
 
@@ -840,7 +456,7 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		(void) strsep(&vtopts, ",");
 
 		if (vtopts != NULL) {
-			err = pci_vtnet_parsemac(vtopts, sc->vsc_config.mac);
+			err = net_parsemac(vtopts, sc->vsc_config.mac);
 			if (err != 0) {
 				free(devname);
 				return (err);
@@ -848,33 +464,18 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 			mac_provided = 1;
 		}
 
-		if (strncmp(devname, "vale", 4) == 0)
-			pci_vtnet_netmap_setup(sc, devname);
-		if ((strncmp(devname, "tap", 3) == 0) ||
-		    (strncmp(devname, "vmmnet", 5) == 0))
-			pci_vtnet_tap_setup(sc, devname);
+		sc->vsc_be = netbe_init(devname, pci_vtnet_rx_callback, sc);
+		if (!sc->vsc_be) {
+			WPRINTF(("net backend initialization failed\n"));
+		} else {
+			vc->vc_hv_caps |= netbe_get_cap(sc->vsc_be);
+		}
 
 		free(devname);
 	}
 
-	/*
-	 * The default MAC address is the standard NetApp OUI of 00-a0-98,
-	 * followed by an MD5 of the PCI slot/func number and dev name
-	 */
 	if (!mac_provided) {
-		snprintf(nstr, sizeof(nstr), "%d-%d-%s", pi->pi_slot,
-		    pi->pi_func, vmname);
-
-		MD5Init(&mdctx);
-		MD5Update(&mdctx, nstr, strlen(nstr));
-		MD5Final(digest, &mdctx);
-
-		sc->vsc_config.mac[0] = 0x00;
-		sc->vsc_config.mac[1] = 0xa0;
-		sc->vsc_config.mac[2] = 0x98;
-		sc->vsc_config.mac[3] = digest[0];
-		sc->vsc_config.mac[4] = digest[1];
-		sc->vsc_config.mac[5] = digest[2];
+		net_genmac(pi, sc->vsc_config.mac);
 	}
 
 	/* initialize config space */
@@ -884,8 +485,8 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	pci_set_cfgdata16(pi, PCIR_SUBDEV_0, VIRTIO_TYPE_NET);
 	pci_set_cfgdata16(pi, PCIR_SUBVEND_0, VIRTIO_VENDOR);
 
-	/* Link is up if we managed to open tap device. */
-	sc->vsc_config.status = (opts == NULL || sc->vsc_tapfd >= 0);
+	/* Link is up if we managed to open backend device. */
+	sc->vsc_config.status = (opts == NULL || sc->vsc_be);
 	
 	/* use BAR 1 to map MSI-X table and PBA, if we're using MSI-X */
 	if (vi_intr_init(&sc->vsc_vs, 1, fbsdrun_virtio_msix()))
@@ -898,7 +499,6 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 
 	sc->rx_merge = 1;
 	sc->rx_vhdrlen = sizeof(struct virtio_net_rxhdr);
-	sc->rx_in_progress = 0;
 	pthread_mutex_init(&sc->rx_mtx, NULL); 
 
 	/* 
@@ -956,11 +556,14 @@ pci_vtnet_neg_features(void *vsc, uint64_t negotiated_features)
 
 	sc->vsc_features = negotiated_features;
 
-	if (!(sc->vsc_features & VIRTIO_NET_F_MRG_RXBUF)) {
+	 if (!(negotiated_features & VIRTIO_NET_F_MRG_RXBUF)) {
 		sc->rx_merge = 0;
 		/* non-merge rx header is 2 bytes shorter */
 		sc->rx_vhdrlen -= 2;
 	}
+
+	/* Tell the backend to enable some capabilities it has advertised. */
+	netbe_set_cap(sc->vsc_be, negotiated_features, sc->rx_vhdrlen);
 }
 
 struct pci_devemu pci_de_vnet = {

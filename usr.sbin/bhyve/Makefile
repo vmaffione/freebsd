@@ -22,12 +22,16 @@ SRCS=	\
 	mem.c			\
 	mevent.c		\
 	mptbl.c			\
+	net_backends.c		\
+	net_utils.c		\
 	pci_ahci.c		\
 	pci_emul.c		\
 	pci_hostbridge.c	\
 	pci_irq.c		\
 	pci_lpc.c		\
 	pci_passthru.c		\
+	pci_ptnetmap_memdev.c	\
+	pci_ptnetmap_netif.c	\
 	pci_virtio_block.c	\
 	pci_virtio_net.c	\
 	pci_virtio_rnd.c	\
@@ -47,6 +51,8 @@ SRCS+=	vmm_instruction_emul.c
 
 DPADD=	${LIBVMMAPI} ${LIBMD} ${LIBUTIL} ${LIBPTHREAD}
 LDADD=	-lvmmapi -lmd -lutil -lpthread
+
+CFLAGS=-I/home/vmaffione/git/netmap/sys
 
 WARNS?=	2
 
