@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
 
 #include "bhyverun.h"
 #include "pci_emul.h"
+#include "net_utils.h"
 #include "net_backends.h"
 
 #ifndef PTNET_CSB_ALLOC
@@ -132,12 +133,12 @@ ptnet_regif(struct ptnet_softc *sc)
 		ret = vm_io_reg_handler(vmctx, kick_addr /* ioaddr */,
 					0 /* in */, 0 /* mask_data */,
 					0 /* data */, VM_IO_REGH_KWEVENTS,
-					(void *)sc + i /* cookie */);
+					(void *)sc + 4*i /* cookie */);
 		if (ret) {
 			fprintf(stderr, "%s: vm_io_reg_handler %d\n",
 				__func__, ret);
 		}
-		cfg->entries[i].ioeventfd = (uint64_t) (sc + i);
+		cfg->entries[i].ioeventfd = (uint64_t) (sc + 4*i);
 	}
 
 	ret = ptnetmap_create(sc->ptbe, cfg);

@@ -57,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include "pci_emul.h"
 #include "mevent.h"
 #include "virtio.h"
+#include "net_utils.h"
 #include "net_backends.h"
 
 #define VTNET_RINGSZ	1024

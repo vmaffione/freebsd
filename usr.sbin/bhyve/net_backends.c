@@ -29,7 +29,6 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/types.h>		/* u_short etc */
-#include <net/ethernet.h>	/* ETHER_ADDR_LEN */
 #include <net/if.h>
 
 #include <errno.h>
@@ -1059,60 +1058,4 @@ netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt, int *more)
 	}
 
 	return ret;
-}
-
-/*
- * Some utils functions, which should go in a separate module.
- */
-#include <md5.h>
-#include "pci_emul.h"
-#include "bhyverun.h"
-
-int
-net_parsemac(char *mac_str, uint8_t *mac_addr)
-{
-        struct ether_addr *ea;
-        char *tmpstr;
-        char zero_addr[ETHER_ADDR_LEN] = { 0, 0, 0, 0, 0, 0 };
-
-        tmpstr = strsep(&mac_str,"=");
-
-        if ((mac_str != NULL) && (!strcmp(tmpstr,"mac"))) {
-                ea = ether_aton(mac_str);
-
-                if (ea == NULL || ETHER_IS_MULTICAST(ea->octet) ||
-                    memcmp(ea->octet, zero_addr, ETHER_ADDR_LEN) == 0) {
-			fprintf(stderr, "Invalid MAC %s\n", mac_str);
-                        return (EINVAL);
-                } else
-                        memcpy(mac_addr, ea->octet, ETHER_ADDR_LEN);
-        }
-
-        return (0);
-}
-
-void
-net_genmac(struct pci_devinst *pi, uint8_t *macaddr)
-{
-	/*
-	 * The default MAC address is the standard NetApp OUI of 00-a0-98,
-	 * followed by an MD5 of the PCI slot/func number and dev name
-	 */
-	MD5_CTX mdctx;
-	unsigned char digest[16];
-	char nstr[80];
-
-	snprintf(nstr, sizeof(nstr), "%d-%d-%s", pi->pi_slot,
-	    pi->pi_func, vmname);
-
-	MD5Init(&mdctx);
-	MD5Update(&mdctx, nstr, strlen(nstr));
-	MD5Final(digest, &mdctx);
-
-	macaddr[0] = 0x00;
-	macaddr[1] = 0xa0;
-	macaddr[2] = 0x98;
-	macaddr[3] = digest[0];
-	macaddr[4] = digest[1];
-	macaddr[5] = digest[2];
 }
