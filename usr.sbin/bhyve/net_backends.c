@@ -91,8 +91,7 @@ struct net_backend {
 	 * times to receive a single packet, depending of how big is
 	 * buffers you provide.
 	 */
-	int (*recv)(struct net_backend *be, struct iovec *iov,
-		    int iovcnt, int *more);
+	int (*recv)(struct net_backend *be, struct iovec *iov, int iovcnt);
 
 	/*
 	 * Ask the backend for the virtio-net features it is able to
@@ -158,8 +157,7 @@ netbe_null_send(struct net_backend *be, struct iovec *iov,
 }
 
 static int
-netbe_null_recv(struct net_backend *be, struct iovec *iov,
-	int iovcnt, int *more)
+netbe_null_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 {
 	fprintf(stderr, "netbe_null_recv called ?\n");
 	return -1; /* never called, i believe */
@@ -278,13 +276,12 @@ tap_send(struct net_backend *be, struct iovec *iov, int iovcnt, int len,
 }
 
 static int
-tap_recv(struct net_backend *be, struct iovec *iov, int iovcnt, int *more)
+tap_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 {
 	int ret;
 
 	/* Should never be called without a valid tap fd */
 	assert(be->fd != -1);
-	*more = 0;
 
 	ret = readv(be->fd, iov, iovcnt);
 
@@ -739,90 +736,68 @@ txsync:
 }
 
 static int
-netmap_recv(struct net_backend *be, struct iovec *iov,
-	    int iovcnt, int *more)
+netmap_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 {
 	struct netmap_priv *priv = be->priv;
+	struct netmap_slot *slot = NULL;
 	struct netmap_ring *ring;
-	int tot = 0;
-	int copylen;
-	int iov_avail;
-	uint8_t *iov_buf;
+	void *iov_frag_buf;
+	int iov_frag_size;
+	int totlen = 0;
+	uint32_t head;
 
 	assert(iovcnt);
 
 	ring = priv->rx;
+	head = ring->head;
+	iov_frag_buf = iov->iov_base;
+	iov_frag_size = iov->iov_len;
 
-	/* Init iovec pointers. */
-	iov_buf = iov->iov_base;
-	iov_avail = iov->iov_len;
+	do {
+		int nm_buf_len;
+		void *nm_buf;
 
-	if (!priv->rx_continue) {
-		/* Init netmap pointers. */
-		priv->rx_idx = ring->cur;
-		priv->rx_avail_slots = nm_ring_space(ring);
-		priv->rx_buf = NETMAP_BUF(ring,
-				ring->slot[priv->rx_idx].buf_idx);
-		priv->rx_avail = ring->slot[priv->rx_idx].len;
-		priv->rx_morefrag = (ring->slot[priv->rx_idx].flags
-					& NS_MOREFRAG);
-
-		if (!priv->rx_avail_slots) {
-			goto out;
-		}
-		priv->rx_continue = 1;
-	}
-
-	for (;;) {
-		copylen = priv->rx_avail;
-		if (copylen > iov_avail) {
-			copylen = iov_avail;
+		if (head == ring->tail) {
+			return 0;
 		}
 
-		/* Copy and update pointers. */
-		bcopy(priv->rx_buf, iov_buf, copylen);
-		iov_buf += copylen;
-		iov_avail -= copylen;
-		priv->rx_buf += copylen;
-		priv->rx_avail -= copylen;
-		tot += copylen;
+		slot = ring->slot + head;
+		nm_buf = NETMAP_BUF(ring, slot->buf_idx);
+		nm_buf_len = slot->len;
 
-		if (!priv->rx_avail) {
-			priv->rx_avail_slots--;
-			if (!priv->rx_morefrag || !priv->rx_avail_slots) {
-				priv->rx_continue = 0;
+		for (;;) {
+			int copylen = nm_buf_len < iov_frag_size ? nm_buf_len : iov_frag_size;
+
+			pkt_copy(nm_buf, iov_frag_buf, copylen);
+			nm_buf += copylen;
+			nm_buf_len -= copylen;
+			iov_frag_buf += copylen;
+			iov_frag_size -= copylen;
+			totlen += copylen;
+
+			if (nm_buf_len == 0) {
 				break;
 			}
-			/* Go to the next netmap slot. */
-			priv->rx_idx = nm_ring_next(ring, priv->rx_idx);
-			priv->rx_buf = NETMAP_BUF(ring,
-					ring->slot[priv->rx_idx].buf_idx);
-			priv->rx_avail = ring->slot[priv->rx_idx].len;
-			priv->rx_morefrag =
-				(ring->slot[priv->rx_idx].flags
-					& NS_MOREFRAG);
-		}
 
-		if (!iov_avail) {
-			iovcnt--;
-			if (!iovcnt) {
-				break;
-			}
-			/* Go to the next iovec descriptor. */
 			iov++;
-			iov_buf = iov->iov_base;
-			iov_avail = iov->iov_len;
+			iovcnt--;
+			if (iovcnt == 0) {
+				/* No space to receive. */
+				D("Short iov, drop %d bytes", totlen);
+				return -ENOSPC;
+			}
+			iov_frag_buf = iov->iov_base;
+			iov_frag_size = iov->iov_len;
 		}
-	}
 
-	if (!priv->rx_continue) {
-		/* End of reception: Update the ring now. */
-		ring->cur = ring->head = nm_ring_next(ring, priv->rx_idx);
-	}
-out:
-	*more = priv->rx_continue;
+		head = nm_ring_next(ring, head);
 
-	return tot;
+	} while (slot->flags & NS_MOREFRAG);
+
+	/* Release slots to netmap. */
+	ring->head = ring->cur = head;
+
+	return totlen;
 }
 
 static struct net_backend netmap_backend = {
@@ -1020,7 +995,7 @@ netbe_send(struct net_backend *be, struct iovec *iov, int iovcnt, int len,
 }
 
 int
-netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt, int *more)
+netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 {
 	int hlen = 0;
 	int ret;
@@ -1052,7 +1027,7 @@ netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt, int *more)
 		}
 	}
 
-	ret = be->recv(be, iov, iovcnt, more);
+	ret = be->recv(be, iov, iovcnt);
 	if (ret > 0) {
 		ret += hlen;
 	}
