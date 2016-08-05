@@ -70,8 +70,6 @@ CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/e1000
 CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/mii
 CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/usb/controller
 
-CFLAGS=-I/home/vmaffione/git/netmap/sys
-
 WARNS?=	2
 
 .include <bsd.prog.mk>
