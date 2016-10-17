@@ -302,7 +302,7 @@ static int
 tap_set_cap(struct net_backend *be, uint64_t features,
 		 unsigned vnet_hdr_len)
 {
-	return 0; /* success */
+	return (features || vnet_hdr_len) ? -1 : 0;
 }
 
 static struct net_backend tap_backend = {
