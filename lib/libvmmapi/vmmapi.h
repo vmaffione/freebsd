@@ -161,6 +161,8 @@ int	vm_setup_pptdev_msix(struct vmctx *ctx, int vcpu, int bus, int slot,
 
 int	vm_get_intinfo(struct vmctx *ctx, int vcpu, uint64_t *i1, uint64_t *i2);
 int	vm_set_intinfo(struct vmctx *ctx, int vcpu, uint64_t exit_intinfo);
+
+/* The next three functions are documented in vmmapi.c */
 int	vm_get_fd(struct vmctx *ctx);
 int	vm_map_user_buf(struct vmctx *ctx, vm_paddr_t gpa, size_t len, void *host_buf);
 int	vm_io_reg_handler(struct vmctx *ctx, uint16_t port, uint16_t in,

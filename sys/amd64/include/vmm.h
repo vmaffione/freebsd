@@ -420,6 +420,7 @@ enum vm_intr_trigger {
 	LEVEL_TRIGGER
 };
 
+/* Operations supported on VM_IO_REG_HANDLER ioctl. */
 enum vm_io_regh_type {
 	VM_IO_REGH_DELETE,
 	VM_IO_REGH_KWEVENTS,	/* kernel wait events */

@@ -561,6 +561,7 @@ vm_map_mmio(struct vm *vm, vm_paddr_t gpa, size_t len, vm_paddr_t hpa)
 		return (0);
 }
 
+/* Handler function for VM_MAP_USER_BUF ioctl. */
 int
 vm_map_usermem(struct vm *vm, vm_paddr_t gpa, size_t len, void *buf, struct thread *td)
 {

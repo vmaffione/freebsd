@@ -24,6 +24,11 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * This file contains the emulation of the ptnet network frontend, to be used
+ * with netmap backend.
+ */
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 

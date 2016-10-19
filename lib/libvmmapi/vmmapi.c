@@ -883,12 +883,20 @@ vm_map_pptdev_mmio(struct vmctx *ctx, int bus, int slot, int func,
 	return (ioctl(ctx->fd, VM_MAP_PPTDEV_MMIO, &pptmmio));
 }
 
+/*
+ * Export the file descriptor associated with this VM, userful for external
+ * programs (e.g. to issue ioctl()).
+ */
 int
 vm_get_fd(struct vmctx *ctx)
 {
 	return (ctx->fd);
 }
 
+/*
+ * Map an user-space buffer into the VM at a given physical address.
+ * To be used for devices that expose internal memory.
+ */
 int
 vm_map_user_buf(struct vmctx *ctx, vm_paddr_t gpa, size_t len, void *host_buf)
 {
@@ -902,9 +910,14 @@ vm_map_user_buf(struct vmctx *ctx, vm_paddr_t gpa, size_t len, void *host_buf)
 	return (ioctl(ctx->fd, VM_MAP_USER_BUF, &user_buf));
 }
 
+/*
+ * Register handler for guest I/O accesses on a given I/O port, optionally
+ * filtering on the data. QEMU/KVM implement a similar functionality.
+ */
 int
-vm_io_reg_handler(struct vmctx *ctx, uint16_t port, uint16_t in, uint32_t mask_data, uint32_t data,
-     enum vm_io_regh_type type, void *arg)
+vm_io_reg_handler(struct vmctx *ctx, uint16_t port, uint16_t in,
+		  uint32_t mask_data, uint32_t data,
+		  enum vm_io_regh_type type, void *arg)
 {
 	struct vm_io_reg_handler ioregh;
 

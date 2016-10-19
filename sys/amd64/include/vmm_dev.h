@@ -123,12 +123,14 @@ struct vm_pptdev_mmio {
 	size_t		len;
 };
 
+/* Argument for VM_MAP_USER_BUF ioctl in vmmapi.c */
 struct vm_user_buf {
 	vm_paddr_t	gpa;
 	void 		*addr;
 	size_t		len;
 };
 
+/* Argument for VM_IO_REG_HANDLER ioctl in vmmapi.c */
 struct vm_io_reg_handler {
 	uint16_t		port;		/* I/O address */
 	uint16_t		in;		/* 0 out, 1 in */

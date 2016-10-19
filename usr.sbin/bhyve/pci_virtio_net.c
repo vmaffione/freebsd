@@ -26,6 +26,11 @@
  * $FreeBSD$
  */
 
+/*
+ * This file contains the emulation of the virtio-net network frontend. Network
+ * backends are in net_backends.c.
+ */
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -57,8 +62,8 @@ __FBSDID("$FreeBSD$");
 #include "pci_emul.h"
 #include "mevent.h"
 #include "virtio.h"
-#include "net_utils.h"
-#include "net_backends.h"
+#include "net_utils.h"    /* MAC address generation */
+#include "net_backends.h" /* VirtIO capabilities */
 
 #define VTNET_RINGSZ	1024
 
