@@ -102,6 +102,7 @@ ptnet_get_netmap_if(struct ptnet_softc *sc)
 static int
 ptnet_regif(struct ptnet_softc *sc)
 {
+	struct ptnetmap_cfgentry_bhyve *cfgentry;
 	struct pci_devinst *pi = sc->pi;
 	struct vmctx *vmctx = pi->pi_vmctx;
 	struct ptnetmap_cfg *cfg;
@@ -114,23 +115,25 @@ ptnet_regif(struct ptnet_softc *sc)
 		return -1;
 	}
 
-	cfg = calloc(1, sizeof(*cfg) + sc->num_rings * sizeof(cfg->entries[0]));
+	cfg = calloc(1, sizeof(*cfg) + sc->num_rings * sizeof(*cfgentry));
 
-	cfg->features = PTNETMAP_CFG_FEAT_CSB | PTNETMAP_CFG_FEAT_EVENTFD;
+	cfg->cfgtype = PTNETMAP_CFGTYPE_BHYVE;
+	cfg->entry_size = sizeof(*cfgentry);
 	cfg->num_rings = sc->num_rings;
 	cfg->ptrings = sc->csb;
 
 	kick_addr = pi->pi_bar[PTNETMAP_IO_PCI_BAR].addr + PTNET_IO_KICK_BASE;
+	cfgentry = (struct ptnetmap_cfgentry_bhyve *)(cfg + 1);
 
-	for (i = 0; i < sc->num_rings; i++, kick_addr += 4) {
+	for (i = 0; i < sc->num_rings; i++, kick_addr += 4, cfgentry++) {
 		struct msix_table_entry *mte;
 		uint64_t cookie = sc->ioregs[PTNET_IO_MAC_LO >> 2] + 4*i;
 
-		cfg->entries[i].irqfd = vm_get_fd(vmctx);
-		cfg->entries[i].ioctl.com = VM_LAPIC_MSI;
+		cfgentry->ioctl_fd = vm_get_fd(vmctx);
+		cfgentry->ioctl_cmd = VM_LAPIC_MSI;
 		mte = &pi->pi_msix.table[i];
-		cfg->entries[i].ioctl.data.msix.addr = mte->addr;
-		cfg->entries[i].ioctl.data.msix.msg = mte->msg_data;
+		cfgentry->ioctl_data.addr = mte->addr;
+		cfgentry->ioctl_data.msg_data = mte->msg_data;
 
 		fprintf(stderr, "%s: vector %u, addr %lu, data %u, "
 				"kick_addr %u, cookie: %p\n",
@@ -145,7 +148,7 @@ ptnet_regif(struct ptnet_softc *sc)
 			fprintf(stderr, "%s: vm_io_reg_handler %d\n",
 				__func__, ret);
 		}
-		cfg->entries[i].ioeventfd = (uint64_t) cookie;
+		cfgentry->wchan = (uint64_t) cookie;
 	}
 
 	ret = ptnetmap_create(sc->ptbe, cfg);
