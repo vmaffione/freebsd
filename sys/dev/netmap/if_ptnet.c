@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2016, Vincenzo Maffione <v DoT maffione AT gmail DoT com>
+ * Copyright (c) 2016, Vincenzo Maffione
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,12 +22,13 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 /* Driver for ptnet paravirtualized network device. */
 
 #include <sys/cdefs.h>
-//__FBSDID("$FreeBSD: releng/10.2/sys/dev/netmap/netmap_ptnet.c xxx $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -93,6 +94,13 @@
 
 #ifndef INET
 #error "INET not defined, cannot support offloadings"
+#endif
+
+#if __FreeBSD_version >= 1100000
+static uint64_t	ptnet_get_counter(if_t, ift_counter);
+#else
+typedef struct ifnet *if_t;
+#define if_getsoftc(_ifp)   (_ifp)->if_softc
 #endif
 
 //#define PTNETMAP_STATS
@@ -185,7 +193,6 @@ static int	ptnet_shutdown(device_t);
 
 static void	ptnet_init(void *opaque);
 static int	ptnet_ioctl(if_t ifp, u_long cmd, caddr_t data);
-static uint64_t	ptnet_get_counter(if_t, ift_counter);
 static int	ptnet_init_locked(struct ptnet_softc *sc);
 static int	ptnet_stop(struct ptnet_softc *sc);
 static int	ptnet_transmit(if_t ifp, struct mbuf *m);
@@ -197,7 +204,9 @@ static void	ptnet_tx_task(void *context, int pending);
 
 static int	ptnet_media_change(if_t ifp);
 static void	ptnet_media_status(if_t ifp, struct ifmediareq *ifmr);
+#ifdef PTNETMAP_STATS
 static void	ptnet_tick(void *opaque);
+#endif
 
 static int	ptnet_irqs_init(struct ptnet_softc *sc);
 static void	ptnet_irqs_fini(struct ptnet_softc *sc);
@@ -332,7 +341,11 @@ ptnet_attach(device_t dev)
 	}
 
 	{
-		vm_paddr_t paddr = vtophys(sc->csb);
+		/*
+		 * We use uint64_t rather than vm_paddr_t since we
+		 * need 64 bit addresses even on 32 bit platforms.
+		 */
+		uint64_t paddr = vtophys(sc->csb);
 
 		bus_write_4(sc->iomem, PTNET_IO_CSBBAH,
 			    (paddr >> 32) & 0xffffffff);
@@ -398,7 +411,9 @@ ptnet_attach(device_t dev)
 	ifp->if_flags = IFF_BROADCAST | IFF_MULTICAST | IFF_SIMPLEX;
 	ifp->if_init = ptnet_init;
 	ifp->if_ioctl = ptnet_ioctl;
+#if __FreeBSD_version >= 1100000
 	ifp->if_get_counter = ptnet_get_counter;
+#endif
 	ifp->if_transmit = ptnet_transmit;
 	ifp->if_qflush = ptnet_qflush;
 
@@ -887,8 +902,9 @@ ptnet_init_locked(struct ptnet_softc *sc)
 	sc->min_tx_space = PTNET_MAX_PKT_SIZE / nm_buf_size + 2;
 	device_printf(sc->dev, "%s: min_tx_space = %u\n", __func__,
 		      sc->min_tx_space);
-
+#ifdef PTNETMAP_STATS
 	callout_reset(&sc->tick, hz, ptnet_tick, sc);
+#endif
 
 	ifp->if_drv_flags |= IFF_DRV_RUNNING;
 
@@ -978,6 +994,7 @@ ptnet_media_change(if_t ifp)
 	return 0;
 }
 
+#if __FreeBSD_version >= 1100000
 static uint64_t
 ptnet_get_counter(if_t ifp, ift_counter cnt)
 {
@@ -1015,14 +1032,17 @@ ptnet_get_counter(if_t ifp, ift_counter cnt)
 		return (if_get_counter_default(ifp, cnt));
 	}
 }
+#endif
 
+
+#ifdef PTNETMAP_STATS
 /* Called under core lock. */
 static void
 ptnet_tick(void *opaque)
 {
 	struct ptnet_softc *sc = opaque;
+	int i;
 
-#ifdef PTNETMAP_STATS
 	for (i = 0; i < sc->num_rings; i++) {
 		struct ptnet_queue *pq = sc->queues + i;
 		struct ptnet_queue_stats cur = pq->stats;
@@ -1045,10 +1065,9 @@ ptnet_tick(void *opaque)
 		pq->last_stats = cur;
 	}
 	microtime(&sc->last_ts);
-#endif /* PTNETMAP_STATS */
-
 	callout_schedule(&sc->tick, hz);
 }
+#endif /* PTNETMAP_STATS */
 
 static void
 ptnet_media_status(if_t ifp, struct ifmediareq *ifmr)
@@ -1076,7 +1095,7 @@ static int
 ptnet_nm_config(struct netmap_adapter *na, unsigned *txr, unsigned *txd,
 		unsigned *rxr, unsigned *rxd)
 {
-	struct ptnet_softc *sc = na->ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(na->ifp);
 
 	*txr = bus_read_4(sc->iomem, PTNET_IO_NUM_TX_RINGS);
 	*rxr = bus_read_4(sc->iomem, PTNET_IO_NUM_RX_RINGS);
@@ -1124,9 +1143,11 @@ ptnet_sync_from_csb(struct ptnet_softc *sc, struct netmap_adapter *na)
 static void
 ptnet_update_vnet_hdr(struct ptnet_softc *sc)
 {
-	sc->vnet_hdr_len = ptnet_vnet_hdr ? PTNET_HDR_SIZE : 0;
+	unsigned int wanted_hdr_len = ptnet_vnet_hdr ? PTNET_HDR_SIZE : 0;
+
+	bus_write_4(sc->iomem, PTNET_IO_VNET_HDR_LEN, wanted_hdr_len);
+	sc->vnet_hdr_len = bus_read_4(sc->iomem, PTNET_IO_VNET_HDR_LEN);
 	sc->ptna->hwup.up.virt_hdr_len = sc->vnet_hdr_len;
-	bus_write_4(sc->iomem, PTNET_IO_VNET_HDR_LEN, sc->vnet_hdr_len);
 }
 
 static int
@@ -1239,7 +1260,7 @@ ptnet_nm_register(struct netmap_adapter *na, int onoff)
 static int
 ptnet_nm_txsync(struct netmap_kring *kring, int flags)
 {
-	struct ptnet_softc *sc = kring->na->ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(kring->na->ifp);
 	struct ptnet_queue *pq = sc->queues + kring->ring_id;
 	bool notify;
 
@@ -1254,7 +1275,7 @@ ptnet_nm_txsync(struct netmap_kring *kring, int flags)
 static int
 ptnet_nm_rxsync(struct netmap_kring *kring, int flags)
 {
-	struct ptnet_softc *sc = kring->na->ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(kring->na->ifp);
 	struct ptnet_queue *pq = sc->rxqueues + kring->ring_id;
 	bool notify;
 

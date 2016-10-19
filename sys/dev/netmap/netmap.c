@@ -1,5 +1,9 @@
 /*
- * Copyright (C) 2011-2014 Matteo Landi, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2011-2014 Matteo Landi
+ * Copyright (C) 2011-2016 Luigi Rizzo
+ * Copyright (C) 2011-2016 Giuseppe Lettieri
+ * Copyright (C) 2011-2016 Vincenzo Maffione
+ * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -479,7 +483,6 @@ static int netmap_no_timestamp; /* don't timestamp on rxsync */
 int netmap_mitigate = 1;
 int netmap_no_pendintr = 1;
 int netmap_txsync_retry = 2;
-int netmap_adaptive_io = 0;
 int netmap_flags = 0;	/* debug flags */
 static int netmap_fwd = 0;	/* force transparent mode */
 
@@ -536,8 +539,6 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, no_pendintr,
     CTLFLAG_RW, &netmap_no_pendintr, 0, "Always look for new received packets.");
 SYSCTL_INT(_dev_netmap, OID_AUTO, txsync_retry, CTLFLAG_RW,
     &netmap_txsync_retry, 0 , "Number of txsync loops in bridge's flush.");
-SYSCTL_INT(_dev_netmap, OID_AUTO, adaptive_io, CTLFLAG_RW,
-    &netmap_adaptive_io, 0 , "Adaptive I/O on paravirt");
 
 SYSCTL_INT(_dev_netmap, OID_AUTO, flags, CTLFLAG_RW, &netmap_flags, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, fwd, CTLFLAG_RW, &netmap_fwd, 0 , "");
@@ -926,7 +927,7 @@ netmap_do_unregif(struct netmap_priv_d *priv)
 	}
 #endif
 
-	if (nm_kring_pending(priv)) {
+	if (na->active_fds <= 0 || nm_kring_pending(priv)) {
 		na->nm_register(na, 0);
 	}
 
@@ -1555,7 +1556,7 @@ nm_txsync_prologue(struct netmap_kring *kring, struct netmap_ring *ring)
 		}
 	}
 	if (ring->tail != kring->rtail) {
-		RD(5, "tail overwritten was %d need %d",
+		RD(5, "%s tail overwritten was %d need %d", kring->name,
 			ring->tail, kring->rtail);
 		ring->tail = kring->rtail;
 	}
@@ -1624,6 +1625,7 @@ nm_rxsync_prologue(struct netmap_kring *kring, struct netmap_ring *ring)
 	}
 	return head;
 }
+
 
 /*
  * Error routine called when txsync/rxsync detects an error.
@@ -2082,6 +2084,7 @@ err:
 	return error;
 }
 
+
 /*
  * update kring and ring at the end of rxsync/txsync.
  */
@@ -2386,6 +2389,7 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 
 	return (error);
 }
+
 
 /*
  * select(2) and poll(2) handlers for the "netmap" device.
@@ -3004,9 +3008,9 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	struct netmap_kring *kring, *tx_kring;
 	u_int len = MBUF_LEN(m);
 	u_int error = ENOBUFS;
+	unsigned int txr;
 	struct mbq *q;
 	int space;
-	int txr;
 
 	kring = &na->rx_rings[na->num_rx_rings];
 	// XXX [Linux] we do not need this lock
@@ -3020,6 +3024,9 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	}
 
 	txr = MBUF_TXQ(m);
+	if (txr >= na->num_tx_rings) {
+		txr %= na->num_tx_rings;
+	}
 	tx_kring = &NMR(na, NR_TX)[txr];
 
 	if (tx_kring->nr_mode == NKR_NETMAP_OFF) {
@@ -3036,7 +3043,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	}
 
 	if (nm_os_mbuf_has_offld(m)) {
-		D("%s drop mbuf requiring offloadings", na->name);
+		RD(1, "%s drop mbuf requiring offloadings", na->name);
 		goto done;
 	}
 
