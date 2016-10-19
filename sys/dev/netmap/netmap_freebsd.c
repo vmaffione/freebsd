@@ -337,29 +337,32 @@ nm_os_generic_xmit_frame(struct nm_os_gen_arg *a)
 	struct ifnet *ifp = a->ifp;
 	struct mbuf *m = a->m;
 
+#if __FreeBSD_version < 1100000
 	/*
-	 * The mbuf should be a cluster from our special pool,
-	 * so we do not need to do an m_copyback but just copy
-	 * (and eventually, just reference the netmap buffer)
+	 * Old FreeBSD versions. The mbuf has a cluster attached,
+	 * we need to copy from the cluster to the netmap buffer.
 	 */
-
 	if (MBUF_REFCNT(m) != 1) {
 		D("invalid refcnt %d for %p", MBUF_REFCNT(m), m);
 		panic("in generic_xmit_frame");
 	}
-	// XXX the ext_size check is unnecessary if we link the netmap buf
 	if (m->m_ext.ext_size < len) {
 		RD(5, "size %d < len %d", m->m_ext.ext_size, len);
 		len = m->m_ext.ext_size;
 	}
-	if (0) { /* XXX seems to have negligible benefits */
-		m->m_ext.ext_buf = m->m_data = a->addr;
-	} else {
-		bcopy(a->addr, m->m_data, len);
-	}
+	bcopy(a->addr, m->m_data, len);
+#else  /* __FreeBSD_version >= 1100000 */
+	/* New FreeBSD versions. Link the external storage to
+	 * the netmap buffer, so that no copy is necessary. */
+	m->m_ext.ext_buf = m->m_data = a->addr;
+	m->m_ext.ext_size = len;
+#endif /* __FreeBSD_version >= 1100000 */
+
 	m->m_len = m->m_pkthdr.len = len;
-	// inc refcount. All ours, we could skip the atomic
-	atomic_fetchadd_int(PNT_MBUF_REFCNT(m), 1);
+
+	/* mbuf refcnt is not contended, no need to use atomic
+	 * (a memory barrier is enough). */
+	SET_MBUF_REFCNT(m, 2);
 	M_HASHTYPE_SET(m, M_HASHTYPE_OPAQUE);
 	m->m_pkthdr.flowid = a->ring_nr;
 	m->m_pkthdr.rcvif = ifp; /* used for tx notification */
@@ -641,7 +644,8 @@ DRIVER_MODULE_ORDERED(ptn_memdev, pci, ptn_memdev_driver, ptnetmap_devclass,
  * of the netmap memory mapped in the guest.
  */
 int
-nm_os_pt_memdev_iomap(struct ptnetmap_memdev *ptn_dev, vm_paddr_t *nm_paddr, void **nm_addr)
+nm_os_pt_memdev_iomap(struct ptnetmap_memdev *ptn_dev, vm_paddr_t *nm_paddr,
+		      void **nm_addr)
 {
 	uint32_t mem_size;
 	int rid;
@@ -665,8 +669,8 @@ nm_os_pt_memdev_iomap(struct ptnetmap_memdev *ptn_dev, vm_paddr_t *nm_paddr, voi
 
 	D("=== BAR %d start %lx len %lx mem_size %x ===",
 			PTNETMAP_MEM_PCI_BAR,
-			*nm_paddr,
-			rman_get_size(ptn_dev->pci_mem),
+			(unsigned long)(*nm_paddr),
+			(unsigned long)rman_get_size(ptn_dev->pci_mem),
 			mem_size);
 	return (0);
 }
@@ -989,12 +993,7 @@ nm_os_ncpus(void)
 
 struct nm_kthread_ctx {
 	struct thread *user_td;		/* thread user-space (kthread creator) to send ioctl */
-	/* notification to guest (interrupt) */
-	int irq_fd;		/* ioctl fd */
-	struct nm_kth_ioctl irq_ioctl;	/* ioctl arguments */
-
-	/* notification from guest */
-	void *ioevent_file; 		/* tsleep() argument */
+	struct ptnetmap_cfgentry_bhyve	cfg;
 
 	/* worker function and parameter */
 	nm_kthread_worker_fn_t worker_fn;
@@ -1030,8 +1029,8 @@ nm_os_kthread_wakeup_worker(struct nm_kthread *nmk)
 	 */
 	mtx_lock(&nmk->worker_lock);
 	nmk->scheduled++;
-	if (nmk->worker_ctx.ioevent_file) {
-		wakeup(nmk->worker_ctx.ioevent_file);
+	if (nmk->worker_ctx.cfg.wchan) {
+		wakeup((void *)nmk->worker_ctx.cfg.wchan);
 	}
 	mtx_unlock(&nmk->worker_lock);
 }
@@ -1042,11 +1041,13 @@ nm_os_kthread_send_irq(struct nm_kthread *nmk)
 	struct nm_kthread_ctx *ctx = &nmk->worker_ctx;
 	int err;
 
-	if (ctx->user_td && ctx->irq_fd > 0) {
-		err = kern_ioctl(ctx->user_td, ctx->irq_fd, ctx->irq_ioctl.com, (caddr_t)&ctx->irq_ioctl.data.msix);
+	if (ctx->user_td && ctx->cfg.ioctl_fd > 0) {
+		err = kern_ioctl(ctx->user_td, ctx->cfg.ioctl_fd, ctx->cfg.ioctl_cmd,
+				 (caddr_t)&ctx->cfg.ioctl_data);
 		if (err) {
 			D("kern_ioctl error: %d ioctl parameters: fd %d com %lu data %p",
-				err, ctx->irq_fd, ctx->irq_ioctl.com, &ctx->irq_ioctl.data);
+				err, ctx->cfg.ioctl_fd, (unsigned long)ctx->cfg.ioctl_cmd,
+				&ctx->cfg.ioctl_data);
 		}
 	}
 }
@@ -1078,10 +1079,10 @@ nm_kthread_worker(void *data)
 		}
 
 		/*
-		 * if ioevent_file is not defined, we don't have notification
+		 * if wchan is not defined, we don't have notification
 		 * mechanism and we continually execute worker_fn()
 		 */
-		if (!ctx->ioevent_file) {
+		if (!ctx->cfg.wchan) {
 			ctx->worker_fn(ctx->worker_private); /* worker body */
 		} else {
 			/* checks if there is a pending notification */
@@ -1095,7 +1096,7 @@ nm_kthread_worker(void *data)
 				continue;
 			} else if (nmk->run) {
 				/* wait on event with one second timeout */
-				msleep_spin(ctx->ioevent_file, &nmk->worker_lock,
+				msleep_spin((void *)ctx->cfg.wchan, &nmk->worker_lock,
 					    "nmk_ev", hz);
 				nmk->scheduled++;
 			}
@@ -1106,29 +1107,6 @@ nm_kthread_worker(void *data)
 	kthread_exit();
 }
 
-static int
-nm_kthread_open_files(struct nm_kthread *nmk, struct nm_kthread_cfg *cfg)
-{
-	/* send irq through ioctl to bhyve (vmm.ko) */
-	if (cfg->event.irqfd) {
-		nmk->worker_ctx.irq_fd = cfg->event.irqfd;
-		nmk->worker_ctx.irq_ioctl = cfg->event.ioctl;
-	}
-	/* ring.ioeventfd contains the chan where do tsleep to wait events */
-	if (cfg->event.ioeventfd) {
-		nmk->worker_ctx.ioevent_file = (void *)cfg->event.ioeventfd;
-	}
-
-	return 0;
-}
-
-static void
-nm_kthread_close_files(struct nm_kthread *nmk)
-{
-	nmk->worker_ctx.irq_fd = 0;
-	nmk->worker_ctx.ioevent_file = NULL;
-}
-
 void
 nm_os_kthread_set_affinity(struct nm_kthread *nmk, int affinity)
 {
@@ -1136,10 +1114,15 @@ nm_os_kthread_set_affinity(struct nm_kthread *nmk, int affinity)
 }
 
 struct nm_kthread *
-nm_os_kthread_create(struct nm_kthread_cfg *cfg)
+nm_os_kthread_create(struct nm_kthread_cfg *cfg, unsigned int cfgtype,
+		     void *opaque)
 {
 	struct nm_kthread *nmk = NULL;
-	int error;
+
+	if (cfgtype != PTNETMAP_CFGTYPE_BHYVE) {
+		D("Unsupported cfgtype %u", cfgtype);
+		return NULL;
+	}
 
 	nmk = malloc(sizeof(*nmk),  M_DEVBUF, M_NOWAIT | M_ZERO);
 	if (!nmk)
@@ -1154,15 +1137,12 @@ nm_os_kthread_create(struct nm_kthread_cfg *cfg)
 	/* attach kthread to user process (ptnetmap) */
 	nmk->attach_user = cfg->attach_user;
 
-	/* open event fd */
-	error = nm_kthread_open_files(nmk, cfg);
-	if (error)
-		goto err;
+	/* store kick/interrupt configuration */
+	if (opaque) {
+		nmk->worker_ctx.cfg = *((struct ptnetmap_cfgentry_bhyve *)opaque);
+	}
 
 	return nmk;
-err:
-	free(nmk, M_DEVBUF);
-	return NULL;
 }
 
 int
@@ -1224,7 +1204,7 @@ nm_os_kthread_delete(struct nm_kthread *nmk)
 		nm_os_kthread_stop(nmk);
 	}
 
-	nm_kthread_close_files(nmk);
+	memset(&nmk->worker_ctx.cfg, 0, sizeof(nmk->worker_ctx.cfg));
 
 	free(nmk, M_DEVBUF);
 }
@@ -1471,6 +1451,7 @@ netmap_loader(__unused struct module *module, int event, __unused void *arg)
 	return (error);
 }
 
+#ifdef DEV_MODULE_ORDERED
 /*
  * The netmap module contains three drivers: (i) the netmap character device
  * driver; (ii) the ptnetmap memdev PCI device driver, (iii) the ptnet PCI
@@ -1483,6 +1464,9 @@ netmap_loader(__unused struct module *module, int event, __unused void *arg)
  * macros for (ii) and (iii).
  */
 DEV_MODULE_ORDERED(netmap, netmap_loader, NULL, SI_ORDER_MIDDLE);
+#else /* !DEV_MODULE_ORDERED */
+DEV_MODULE(netmap, netmap_loader, NULL);
+#endif /* DEV_MODULE_ORDERED  */
 MODULE_DEPEND(netmap, pci, 1, 1, 1);
 MODULE_VERSION(netmap, 1);
 /* reduce conditional code */

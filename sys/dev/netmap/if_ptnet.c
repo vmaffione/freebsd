@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2016, Vincenzo Maffione <v DoT maffione AT gmail DoT com>
+ * Copyright (c) 2016, Vincenzo Maffione
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,13 +22,15 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * $FreeBSD$
  */
 
 /* Driver for ptnet paravirtualized network device. */
 
 #include <sys/cdefs.h>
-//__FBSDID("$FreeBSD: releng/10.2/sys/dev/netmap/netmap_ptnet.c xxx $");
 
+#include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -51,6 +53,7 @@
 
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
@@ -91,6 +94,13 @@
 
 #ifndef INET
 #error "INET not defined, cannot support offloadings"
+#endif
+
+#if __FreeBSD_version >= 1100000
+static uint64_t	ptnet_get_counter(if_t, ift_counter);
+#else
+typedef struct ifnet *if_t;
+#define if_getsoftc(_ifp)   (_ifp)->if_softc
 #endif
 
 //#define PTNETMAP_STATS
@@ -141,7 +151,7 @@ struct ptnet_queue {
 
 struct ptnet_softc {
 	device_t		dev;
-	struct ifnet		*ifp;
+	if_t			ifp;
 	struct ifmedia		media;
 	struct mtx		lock;
 	char			lock_name[16];
@@ -182,24 +192,26 @@ static int	ptnet_resume(device_t);
 static int	ptnet_shutdown(device_t);
 
 static void	ptnet_init(void *opaque);
-static int	ptnet_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data);
+static int	ptnet_ioctl(if_t ifp, u_long cmd, caddr_t data);
 static int	ptnet_init_locked(struct ptnet_softc *sc);
 static int	ptnet_stop(struct ptnet_softc *sc);
-static int	ptnet_transmit(struct ifnet *ifp, struct mbuf *m);
+static int	ptnet_transmit(if_t ifp, struct mbuf *m);
 static int	ptnet_drain_transmit_queue(struct ptnet_queue *pq,
 					   unsigned int budget,
 					   bool may_resched);
-static void	ptnet_qflush(struct ifnet *ifp);
+static void	ptnet_qflush(if_t ifp);
 static void	ptnet_tx_task(void *context, int pending);
 
-static int	ptnet_media_change(struct ifnet *ifp);
-static void	ptnet_media_status(struct ifnet *ifp, struct ifmediareq *ifmr);
+static int	ptnet_media_change(if_t ifp);
+static void	ptnet_media_status(if_t ifp, struct ifmediareq *ifmr);
+#ifdef PTNETMAP_STATS
 static void	ptnet_tick(void *opaque);
+#endif
 
 static int	ptnet_irqs_init(struct ptnet_softc *sc);
 static void	ptnet_irqs_fini(struct ptnet_softc *sc);
 
-static uint32_t ptnet_nm_ptctl(struct ifnet *ifp, uint32_t cmd);
+static uint32_t ptnet_nm_ptctl(if_t ifp, uint32_t cmd);
 static int	ptnet_nm_config(struct netmap_adapter *na, unsigned *txr,
 				unsigned *txd, unsigned *rxr, unsigned *rxd);
 static void	ptnet_update_vnet_hdr(struct ptnet_softc *sc);
@@ -284,7 +296,7 @@ ptnet_attach(device_t dev)
 	struct netmap_adapter na_arg;
 	unsigned int nifp_offset;
 	struct ptnet_softc *sc;
-	struct ifnet *ifp;
+	if_t ifp;
 	uint32_t macreg;
 	int err, rid;
 	int i;
@@ -329,7 +341,11 @@ ptnet_attach(device_t dev)
 	}
 
 	{
-		vm_paddr_t paddr = vtophys(sc->csb);
+		/*
+		 * We use uint64_t rather than vm_paddr_t since we
+		 * need 64 bit addresses even on 32 bit platforms.
+		 */
+		uint64_t paddr = vtophys(sc->csb);
 
 		bus_write_4(sc->iomem, PTNET_IO_CSBBAH,
 			    (paddr >> 32) & 0xffffffff);
@@ -390,11 +406,14 @@ ptnet_attach(device_t dev)
 	}
 
 	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
-	if_initbaudrate(ifp, IF_Gbps(10));
+	ifp->if_baudrate = IF_Gbps(10);
 	ifp->if_softc = sc;
 	ifp->if_flags = IFF_BROADCAST | IFF_MULTICAST | IFF_SIMPLEX;
 	ifp->if_init = ptnet_init;
 	ifp->if_ioctl = ptnet_ioctl;
+#if __FreeBSD_version >= 1100000
+	ifp->if_get_counter = ptnet_get_counter;
+#endif
 	ifp->if_transmit = ptnet_transmit;
 	ifp->if_qflush = ptnet_qflush;
 
@@ -414,7 +433,7 @@ ptnet_attach(device_t dev)
 
 	ether_ifattach(ifp, sc->hwaddr);
 
-	ifp->if_data.ifi_hdrlen = sizeof(struct ether_vlan_header);
+	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
 	ifp->if_capabilities |= IFCAP_JUMBO_MTU | IFCAP_VLAN_MTU;
 
 	if (sc->ptfeatures & PTNETMAP_F_VNET_HDR) {
@@ -720,9 +739,9 @@ ptnet_init(void *opaque)
 }
 
 static int
-ptnet_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
+ptnet_ioctl(if_t ifp, u_long cmd, caddr_t data)
 {
-	struct ptnet_softc *sc = ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(ifp);
 	device_t dev = sc->dev;
 	struct ifreq *ifr = (struct ifreq *)data;
 	int mask, err = 0;
@@ -815,7 +834,7 @@ ptnet_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 static int
 ptnet_init_locked(struct ptnet_softc *sc)
 {
-	struct ifnet *ifp = sc->ifp;
+	if_t ifp = sc->ifp;
 	struct netmap_adapter *na_dr = &sc->ptna->dr.up;
 	struct netmap_adapter *na_nm = &sc->ptna->hwup.up;
 	unsigned int nm_buf_size;
@@ -883,8 +902,9 @@ ptnet_init_locked(struct ptnet_softc *sc)
 	sc->min_tx_space = PTNET_MAX_PKT_SIZE / nm_buf_size + 2;
 	device_printf(sc->dev, "%s: min_tx_space = %u\n", __func__,
 		      sc->min_tx_space);
-
+#ifdef PTNETMAP_STATS
 	callout_reset(&sc->tick, hz, ptnet_tick, sc);
+#endif
 
 	ifp->if_drv_flags |= IFF_DRV_RUNNING;
 
@@ -906,7 +926,7 @@ err_mem_finalize:
 static int
 ptnet_stop(struct ptnet_softc *sc)
 {
-	struct ifnet *ifp = sc->ifp;
+	if_t ifp = sc->ifp;
 	struct netmap_adapter *na_dr = &sc->ptna->dr.up;
 	struct netmap_adapter *na_nm = &sc->ptna->hwup.up;
 	int i;
@@ -939,9 +959,9 @@ ptnet_stop(struct ptnet_softc *sc)
 }
 
 static void
-ptnet_qflush(struct ifnet *ifp)
+ptnet_qflush(if_t ifp)
 {
-	struct ptnet_softc *sc = ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(ifp);
 	int i;
 
 	/* Flush all the bufrings and do the interface flush. */
@@ -962,9 +982,9 @@ ptnet_qflush(struct ifnet *ifp)
 }
 
 static int
-ptnet_media_change(struct ifnet *ifp)
+ptnet_media_change(if_t ifp)
 {
-	struct ptnet_softc *sc = ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(ifp);
 	struct ifmedia *ifm = &sc->media;
 
 	if (IFM_TYPE(ifm->ifm_media) != IFM_ETHER) {
@@ -974,12 +994,11 @@ ptnet_media_change(struct ifnet *ifp)
 	return 0;
 }
 
-/* Called under core lock. */
-static void
-ptnet_tick(void *opaque)
+#if __FreeBSD_version >= 1100000
+static uint64_t
+ptnet_get_counter(if_t ifp, ift_counter cnt)
 {
-	struct ptnet_softc *sc = opaque;
-	struct ifnet *ifp = sc->ifp;
+	struct ptnet_softc *sc = if_getsoftc(ifp);
 	struct ptnet_queue_stats stats[2];
 	int i;
 
@@ -996,18 +1015,34 @@ ptnet_tick(void *opaque)
 		stats[idx].mcasts	+= pq->stats.mcasts;
 	}
 
-	/* Update interface statistics. */
-	ifp->if_opackets	= stats[0].packets;
-	ifp->if_obytes		= stats[0].bytes;
-	ifp->if_omcasts		= stats[0].mcasts;
-	ifp->if_oerrors		= stats[0].errors;
-	ifp->if_ipackets	= stats[1].packets;
-	ifp->if_ibytes		= stats[1].bytes;
-	ifp->if_imcasts		= stats[1].mcasts;
-	ifp->if_ierrors		= stats[1].errors;
-	ifp->if_iqdrops		= stats[1].iqdrops;
+	switch (cnt) {
+	case IFCOUNTER_IPACKETS:
+		return (stats[1].packets);
+	case IFCOUNTER_IQDROPS:
+		return (stats[1].iqdrops);
+	case IFCOUNTER_IERRORS:
+		return (stats[1].errors);
+	case IFCOUNTER_OPACKETS:
+		return (stats[0].packets);
+	case IFCOUNTER_OBYTES:
+		return (stats[0].bytes);
+	case IFCOUNTER_OMCASTS:
+		return (stats[0].mcasts);
+	default:
+		return (if_get_counter_default(ifp, cnt));
+	}
+}
+#endif
+
 
 #ifdef PTNETMAP_STATS
+/* Called under core lock. */
+static void
+ptnet_tick(void *opaque)
+{
+	struct ptnet_softc *sc = opaque;
+	int i;
+
 	for (i = 0; i < sc->num_rings; i++) {
 		struct ptnet_queue *pq = sc->queues + i;
 		struct ptnet_queue_stats cur = pq->stats;
@@ -1030,13 +1065,12 @@ ptnet_tick(void *opaque)
 		pq->last_stats = cur;
 	}
 	microtime(&sc->last_ts);
-#endif /* PTNETMAP_STATS */
-
 	callout_schedule(&sc->tick, hz);
 }
+#endif /* PTNETMAP_STATS */
 
 static void
-ptnet_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
+ptnet_media_status(if_t ifp, struct ifmediareq *ifmr)
 {
 	/* We are always active, as the backend netmap port is
 	 * always open in netmap mode. */
@@ -1045,9 +1079,9 @@ ptnet_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
 }
 
 static uint32_t
-ptnet_nm_ptctl(struct ifnet *ifp, uint32_t cmd)
+ptnet_nm_ptctl(if_t ifp, uint32_t cmd)
 {
-	struct ptnet_softc *sc = ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(ifp);
 	int ret;
 
 	bus_write_4(sc->iomem, PTNET_IO_PTCTL, cmd);
@@ -1061,7 +1095,7 @@ static int
 ptnet_nm_config(struct netmap_adapter *na, unsigned *txr, unsigned *txd,
 		unsigned *rxr, unsigned *rxd)
 {
-	struct ptnet_softc *sc = na->ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(na->ifp);
 
 	*txr = bus_read_4(sc->iomem, PTNET_IO_NUM_TX_RINGS);
 	*rxr = bus_read_4(sc->iomem, PTNET_IO_NUM_RX_RINGS);
@@ -1109,17 +1143,19 @@ ptnet_sync_from_csb(struct ptnet_softc *sc, struct netmap_adapter *na)
 static void
 ptnet_update_vnet_hdr(struct ptnet_softc *sc)
 {
-	sc->vnet_hdr_len = ptnet_vnet_hdr ? PTNET_HDR_SIZE : 0;
+	unsigned int wanted_hdr_len = ptnet_vnet_hdr ? PTNET_HDR_SIZE : 0;
+
+	bus_write_4(sc->iomem, PTNET_IO_VNET_HDR_LEN, wanted_hdr_len);
+	sc->vnet_hdr_len = bus_read_4(sc->iomem, PTNET_IO_VNET_HDR_LEN);
 	sc->ptna->hwup.up.virt_hdr_len = sc->vnet_hdr_len;
-	bus_write_4(sc->iomem, PTNET_IO_VNET_HDR_LEN, sc->vnet_hdr_len);
 }
 
 static int
 ptnet_nm_register(struct netmap_adapter *na, int onoff)
 {
 	/* device-specific */
-	struct ifnet *ifp = na->ifp;
-	struct ptnet_softc *sc = ifp->if_softc;
+	if_t ifp = na->ifp;
+	struct ptnet_softc *sc = if_getsoftc(ifp);
 	int native = (na == &sc->ptna->hwup.up);
 	struct ptnet_queue *pq;
 	enum txrx t;
@@ -1224,7 +1260,7 @@ ptnet_nm_register(struct netmap_adapter *na, int onoff)
 static int
 ptnet_nm_txsync(struct netmap_kring *kring, int flags)
 {
-	struct ptnet_softc *sc = kring->na->ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(kring->na->ifp);
 	struct ptnet_queue *pq = sc->queues + kring->ring_id;
 	bool notify;
 
@@ -1239,7 +1275,7 @@ ptnet_nm_txsync(struct netmap_kring *kring, int flags)
 static int
 ptnet_nm_rxsync(struct netmap_kring *kring, int flags)
 {
-	struct ptnet_softc *sc = kring->na->ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(kring->na->ifp);
 	struct ptnet_queue *pq = sc->rxqueues + kring->ring_id;
 	bool notify;
 
@@ -1352,7 +1388,7 @@ ptnet_tx_offload_ctx(struct mbuf *m, int *etype, int *proto, int *start)
 }
 
 static int
-ptnet_tx_offload_tso(struct ifnet *ifp, struct mbuf *m, int eth_type,
+ptnet_tx_offload_tso(if_t ifp, struct mbuf *m, int eth_type,
 		     int offset, bool allow_ecn, struct virtio_net_hdr *hdr)
 {
 	static struct timeval lastecn;
@@ -1391,7 +1427,7 @@ ptnet_tx_offload_tso(struct ifnet *ifp, struct mbuf *m, int eth_type,
 }
 
 static struct mbuf *
-ptnet_tx_offload(struct ifnet *ifp, struct mbuf *m, bool allow_ecn,
+ptnet_tx_offload(if_t ifp, struct mbuf *m, bool allow_ecn,
 		 struct virtio_net_hdr *hdr)
 {
 	int flags, etype, csum_start, proto, error;
@@ -1662,7 +1698,7 @@ ptnet_drain_transmit_queue(struct ptnet_queue *pq, unsigned int budget,
 	struct ptnet_softc *sc = pq->sc;
 	bool have_vnet_hdr = sc->vnet_hdr_len;
 	struct netmap_adapter *na = &sc->ptna->dr.up;
-	struct ifnet *ifp = sc->ifp;
+	if_t ifp = sc->ifp;
 	unsigned int batch_count = 0;
 	struct ptnet_ring *ptring;
 	struct netmap_kring *kring;
@@ -1846,9 +1882,9 @@ ptnet_drain_transmit_queue(struct ptnet_queue *pq, unsigned int budget,
 }
 
 static int
-ptnet_transmit(struct ifnet *ifp, struct mbuf *m)
+ptnet_transmit(if_t ifp, struct mbuf *m)
 {
-	struct ptnet_softc *sc = ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(ifp);
 	struct ptnet_queue *pq;
 	unsigned int queue_idx;
 	int err;
@@ -1961,7 +1997,7 @@ ptnet_rx_eof(struct ptnet_queue *pq, unsigned int budget, bool may_resched)
 	unsigned int const lim = kring->nkr_num_slots - 1;
 	unsigned int head = ring->head;
 	unsigned int batch_count = 0;
-	struct ifnet *ifp = sc->ifp;
+	if_t ifp = sc->ifp;
 	unsigned int count = 0;
 
 	PTNET_Q_LOCK(pq);
@@ -2190,9 +2226,9 @@ ptnet_tx_task(void *context, int pending)
 /* We don't need to handle differently POLL_AND_CHECK_STATUS and
  * POLL_ONLY, since we don't have an Interrupt Status Register. */
 static int
-ptnet_poll(struct ifnet *ifp, enum poll_cmd cmd, int budget)
+ptnet_poll(if_t ifp, enum poll_cmd cmd, int budget)
 {
-	struct ptnet_softc *sc = ifp->if_softc;
+	struct ptnet_softc *sc = if_getsoftc(ifp);
 	unsigned int queue_budget;
 	unsigned int count = 0;
 	bool borrow = false;
