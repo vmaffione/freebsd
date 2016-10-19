@@ -495,12 +495,6 @@ ptnetmap_create(struct ptnetmap_state *ptn, struct ptnetmap_cfg *cfg)
 	struct nmreq req;
 	int err;
 
-	if (!(ptn->acked_features & PTNETMAP_F_BASE)) {
-		fprintf(stderr, "%s: ptnetmap features not acked\n",
-			__func__);
-		return EINVAL;
-	}
-
 	if (ptn->running) {
 		return 0;
 	}
@@ -593,7 +587,7 @@ netmap_init(struct net_backend *be, const char *devname,
 	be->priv = priv;
 
 	priv->ptnetmap.netmap_priv = priv;
-	priv->ptnetmap.features = PTNETMAP_F_BASE;
+	priv->ptnetmap.features = 0;
 	priv->ptnetmap.acked_features = 0;
 	priv->ptnetmap.running = 0;
 	if (ptnetmap) {
