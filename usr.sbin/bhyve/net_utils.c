@@ -32,7 +32,8 @@
 #include <errno.h>
 
 /*
- * Some utils functions, used by net front-ends.
+ * Some utils functions, used by net front-ends. Originally, they were
+ * in pci_virtio_net.c.
  */
 
 int

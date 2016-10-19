@@ -23,11 +23,12 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+#ifndef _NET_UTILS_H_
+#define _NET_UTILS_H_
 
 #include <stdint.h>
 #include "pci_emul.h"
 
-#ifndef _NET_UTILS_H_
 void	net_genmac(struct pci_devinst *pi, uint8_t *macaddr);
 int	net_parsemac(char *mac_str, uint8_t *mac_addr);
 #endif /* _NET_UTILS_H_ */

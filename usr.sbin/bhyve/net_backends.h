@@ -51,7 +51,9 @@ int	netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt);
 
 
 /*
- * VirtIO network device capabilities. Note that we only offer a few of these.
+ * Network device capabilities taken from VirtIO standard.
+ * Despite the name, these capabilities can be used by different frontents
+ * (virtio-net, ptnet) and supported by different backends (netmap, tap, ...).
  */
 #define	VIRTIO_NET_F_CSUM	(1 <<  0) /* host handles partial cksum */
 #define	VIRTIO_NET_F_GUEST_CSUM	(1 <<  1) /* guest handles partial cksum */

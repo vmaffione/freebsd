@@ -24,6 +24,13 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ * This file implements multiple network backends (null, tap, netmap, ...),
+ * to be used by network frontends such as virtio-net and ptnet.
+ * The API to access the backend (e.g. send/receive packets, negotiate
+ * features) is exported by net_backends.h.
+ */
+
 #include <sys/cdefs.h>
 #include <sys/uio.h>
 #include <sys/ioctl.h>
@@ -56,8 +63,9 @@
 #endif
 
 /*
- * The API for network backends. This might need to be exposed
- * if we implement them in separate files.
+ * Each network backend registers a set of function pointers that are
+ * used to implement the net backends API.
+ * This might need to be exposed if we implement backends in separate files.
  */
 struct net_backend {
 	const char *name;	/* name of the backend */
