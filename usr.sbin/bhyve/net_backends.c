@@ -445,7 +445,10 @@ ptnetmap_ack_features(struct ptnetmap_state *ptn, uint32_t wanted_features)
 struct ptnetmap_state *
 get_ptnetmap(struct net_backend *be)
 {
+	struct netmap_pools_info pi;
 	struct netmap_priv *priv;
+	struct nmreq req;
+	int err;
 
 	/* Check that this is a ptnetmap backend. */
 	if (!be || be->set_cap != netmap_set_cap ||
@@ -454,6 +457,21 @@ get_ptnetmap(struct net_backend *be)
 	}
 
 	priv = be->priv;
+
+	memset(&req, 0, sizeof(req));
+	strncpy(req.nr_name, priv->ifname, sizeof(req.nr_name));
+	req.nr_version = NETMAP_API;
+	req.nr_cmd = NETMAP_POOLS_INFO_GET;
+	nmreq_pointer_put(&req, &pi);
+	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
+	if (err) {
+		return NULL;
+	}
+
+	err = ptn_memdev_attach(priv->nmd->mem, &pi);
+	if (err) {
+		return NULL;
+	}
 
 	return &priv->ptnetmap;
 }
@@ -594,9 +612,6 @@ netmap_init(struct net_backend *be, const char *devname,
 		if (netmap_has_vnet_hdr_len(be, VNET_HDR_LEN)) {
 			priv->ptnetmap.features |= PTNETMAP_F_VNET_HDR;
 		}
-		/* XXX Call ptn_memdev_attach() here or in get_ptnetmap ? */
-		ptn_memdev_attach(priv->nmd->mem, priv->nmd->memsize,
-				  priv->memid);
 	} else {
 		char tname[40];
 

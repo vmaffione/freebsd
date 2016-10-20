@@ -115,7 +115,7 @@ struct netmap_if_info {
 	uint16_t num_rx_slots;
 };
 
-int ptn_memdev_attach(void *mem_ptr, uint32_t mem_size, uint16_t mem_id);
+int ptn_memdev_attach(void *mem_ptr, struct netmap_pools_info *);
 int ptnetmap_get_netmap_if(struct ptnetmap_state *ptn,
 			   struct netmap_if_info *nif);
 struct ptnetmap_state * get_ptnetmap(struct net_backend *be);

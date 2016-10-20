@@ -57,8 +57,7 @@ struct ptn_memdev_softc {
 	struct pci_devinst *pi;		/* PCI device instance */
 
 	void *mem_ptr;			/* netmap shared memory */
-	uint64_t mem_size;		/* netmap shared memory size */
-	uint16_t mem_id;		/* netmap memory allocator ID */
+	struct netmap_pools_info info;
 
 	TAILQ_ENTRY(ptn_memdev_softc) next;
 };
@@ -90,15 +89,15 @@ ptn_memdev_delete(struct ptn_memdev_softc *sc)
 }
 
 /*
- * Find ptn_memdev through mem_id (netmap memory allocator ID)
+ * Find ptn_memdev through memid (netmap memory allocator ID)
  */
 static struct ptn_memdev_softc *
-ptn_memdev_find_memid(uint16_t mem_id)
+ptn_memdev_find_memid(uint32_t mem_id)
 {
 	struct ptn_memdev_softc *sc;
 
 	TAILQ_FOREACH(sc, &ptn_memdevs, next) {
-		if (sc->mem_ptr != NULL && mem_id == sc->mem_id) {
+		if (sc->mem_ptr != NULL && mem_id == sc->info.memid) {
 			return sc;
 		}
 	}
@@ -155,11 +154,11 @@ ptn_pci_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 	if (baridx == PTNETMAP_IO_PCI_BAR) {
 		switch (offset) {
 		case PTNET_MDEV_IO_MEMSIZE_LO:
-			return sc->mem_size & 0xffffffff;
+			return sc->info.memsize & 0xffffffff;
 		case PTNET_MDEV_IO_MEMSIZE_HI:
-			return sc->mem_size >> 32;
+			return sc->info.memsize >> 32;
 		case PTNET_MDEV_IO_MEMID:
-			return sc->mem_id;
+			return sc->info.memid;
 		}
 	}
 
@@ -207,7 +206,7 @@ ptn_memdev_configure_bars(struct ptn_memdev_softc *sc)
 
 	/* Allocate a BAR for a memory region. */
 	ret = pci_emul_alloc_bar(sc->pi, PTNETMAP_MEM_PCI_BAR, PCIBAR_MEM32,
-			sc->mem_size);
+			sc->info.memsize);
 	if (ret) {
 		printf("ptnetmap_memdev: membar allocation error %d\n", ret);
 		return ret;
@@ -216,7 +215,7 @@ ptn_memdev_configure_bars(struct ptn_memdev_softc *sc)
 	/* Map netmap memory on the memory BAR. */
 	ret = vm_map_user_buf(sc->pi->pi_vmctx,
 			      sc->pi->pi_bar[PTNETMAP_MEM_PCI_BAR].addr,
-			      sc->mem_size, sc->mem_ptr);
+			      sc->info.memsize, sc->mem_ptr);
 	if (ret) {
 		printf("ptnetmap_memdev: membar map error %d\n", ret);
 		return ret;
@@ -273,13 +272,13 @@ err:
  * ptnetmap-memdev. (shared with the guest VM through PCI-BAR)
  */
 int
-ptn_memdev_attach(void *mem_ptr, uint32_t mem_size, uint16_t mem_id)
+ptn_memdev_attach(void *mem_ptr, struct netmap_pools_info *info)
 {
 	struct ptn_memdev_softc *sc;
 	int ret;
 
 	/* if a device with the same mem_id is already attached, we are done */
-	if (ptn_memdev_find_memid(mem_id)) {
+	if (ptn_memdev_find_memid(info->memid)) {
 		printf("ptnetmap_memdev: already attched\n");
 		return 0;
 	}
@@ -294,8 +293,7 @@ ptn_memdev_attach(void *mem_ptr, uint32_t mem_size, uint16_t mem_id)
 	}
 
 	sc->mem_ptr = mem_ptr;
-	sc->mem_size = mem_size;
-	sc->mem_id = mem_id;
+	sc->info = *info;
 
 	/* configure device PCI-BARs */
 	ret = ptn_memdev_configure_bars(sc);
