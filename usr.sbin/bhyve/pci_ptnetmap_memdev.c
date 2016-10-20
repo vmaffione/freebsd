@@ -159,6 +159,24 @@ ptn_pci_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 			return sc->info.memsize >> 32;
 		case PTNET_MDEV_IO_MEMID:
 			return sc->info.memid;
+		case PTNET_MDEV_IO_IF_POOL_OFS:
+			return sc->info.if_pool_offset;
+		case PTNET_MDEV_IO_IF_POOL_OBJNUM:
+			return sc->info.if_pool_objtotal;
+		case PTNET_MDEV_IO_IF_POOL_OBJSZ:
+			return sc->info.if_pool_objsize;
+		case PTNET_MDEV_IO_RING_POOL_OFS:
+			return sc->info.ring_pool_offset;
+		case PTNET_MDEV_IO_RING_POOL_OBJNUM:
+			return sc->info.ring_pool_objtotal;
+		case PTNET_MDEV_IO_RING_POOL_OBJSZ:
+			return sc->info.ring_pool_objsize;
+		case PTNET_MDEV_IO_BUF_POOL_OFS:
+			return sc->info.buf_pool_offset;
+		case PTNET_MDEV_IO_BUF_POOL_OBJNUM:
+			return sc->info.buf_pool_objtotal;
+		case PTNET_MDEV_IO_BUF_POOL_OBJSZ:
+			return sc->info.buf_pool_objsize;
 		}
 	}
 
