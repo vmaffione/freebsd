@@ -375,6 +375,14 @@ netmap_evloop_thread(void *param)
 	return NULL;
 }
 
+static void
+nmreq_init(struct nmreq *req, char *ifname)
+{
+	memset(req, 0, sizeof(*req));
+	strncpy(req->nr_name, ifname, sizeof(req->nr_name));
+	req->nr_version = NETMAP_API;
+}
+
 static int
 netmap_set_vnet_hdr_len(struct net_backend *be, int vnet_hdr_len)
 {
@@ -382,9 +390,7 @@ netmap_set_vnet_hdr_len(struct net_backend *be, int vnet_hdr_len)
 	struct nmreq req;
 	struct netmap_priv *priv = be->priv;
 
-	memset(&req, 0, sizeof(req));
-	strcpy(req.nr_name, priv->ifname);
-	req.nr_version = NETMAP_API;
+	nmreq_init(&req, priv->ifname);
 	req.nr_cmd = NETMAP_BDG_VNET_HDR;
 	req.nr_arg1 = vnet_hdr_len;
 	err = ioctl(be->fd, NIOCREGIF, &req);
@@ -458,9 +464,7 @@ get_ptnetmap(struct net_backend *be)
 
 	priv = be->priv;
 
-	memset(&req, 0, sizeof(req));
-	strncpy(req.nr_name, priv->ifname, sizeof(req.nr_name));
-	req.nr_version = NETMAP_API;
+	nmreq_init(&req, priv->ifname);
 	req.nr_cmd = NETMAP_POOLS_INFO_GET;
 	nmreq_pointer_put(&req, &pi);
 	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
@@ -521,10 +525,8 @@ ptnetmap_create(struct ptnetmap_state *ptn, struct ptnetmap_cfg *cfg)
 	/* XXX We should stop the netmap evloop here. */
 
 	/* Ask netmap to create kthreads for this interface. */
-	memset(&req, 0, sizeof(req));
-	strncpy(req.nr_name, priv->ifname, sizeof(req.nr_name));
-	req.nr_version = NETMAP_API;
-	ptnetmap_write_cfg(&req, cfg);
+	nmreq_init(&req, priv->ifname);
+	nmreq_pointer_put(&req, cfg);
 	req.nr_cmd = NETMAP_PT_HOST_CREATE;
 	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
 	if (err) {
@@ -550,9 +552,7 @@ ptnetmap_delete(struct ptnetmap_state *ptn)
 	}
 
 	/* Ask netmap to delete kthreads for this interface. */
-	memset(&req, 0, sizeof(req));
-	strncpy(req.nr_name, priv->ifname, sizeof(req.nr_name));
-	req.nr_version = NETMAP_API;
+	nmreq_init(&req, priv->ifname);
 	req.nr_cmd = NETMAP_PT_HOST_DELETE;
 	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
 	if (err) {
