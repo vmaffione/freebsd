@@ -343,6 +343,7 @@ DATA_SET(net_backend_set, tap_backend);
 struct netmap_priv {
 	char ifname[IFNAMSIZ];
 	struct nm_desc *nmd;
+	uint16_t memid;
 	struct netmap_ring *rx;
 	struct netmap_ring *tx;
 	pthread_t evloop_tid;
@@ -485,7 +486,7 @@ ptnetmap_get_hostmemid(struct ptnetmap_state *ptn)
 		return EINVAL;
 	}
 
-	return priv->nmd->req.nr_arg2;
+	return priv->memid;
 }
 
 int
@@ -577,12 +578,11 @@ netmap_init(struct net_backend *be, const char *devname,
 		return -1;
 	}
 
+	priv->memid = priv->nmd->req.nr_arg2;
 	priv->tx = NETMAP_TXRING(priv->nmd->nifp, 0);
 	priv->rx = NETMAP_RXRING(priv->nmd->nifp, 0);
-
 	priv->cb = cb;
 	priv->cb_param = param;
-
 	be->fd = priv->nmd->fd;
 	be->priv = priv;
 
@@ -596,7 +596,7 @@ netmap_init(struct net_backend *be, const char *devname,
 		}
 		/* XXX Call ptn_memdev_attach() here or in get_ptnetmap ? */
 		ptn_memdev_attach(priv->nmd->mem, priv->nmd->memsize,
-				  priv->nmd->req.nr_arg2);
+				  priv->memid);
 	} else {
 		char tname[40];
 
