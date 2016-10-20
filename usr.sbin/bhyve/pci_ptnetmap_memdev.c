@@ -154,10 +154,12 @@ ptn_pci_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 
 	if (baridx == PTNETMAP_IO_PCI_BAR) {
 		switch (offset) {
-			case PTNETMAP_IO_PCI_MEMSIZE:
-				return sc->mem_size;
-			case PTNETMAP_IO_PCI_HOSTID:
-				return sc->mem_id;
+		case PTNET_MDEV_IO_MEMSIZE_LO:
+			return sc->mem_size & 0xffffffff;
+		case PTNET_MDEV_IO_MEMSIZE_HI:
+			return sc->mem_size >> 32;
+		case PTNET_MDEV_IO_MEMID:
+			return sc->mem_id;
 		}
 	}
 
@@ -197,7 +199,7 @@ ptn_memdev_configure_bars(struct ptn_memdev_softc *sc)
 
 	/* Allocate a BAR for an I/O region. */
 	ret = pci_emul_alloc_bar(sc->pi, PTNETMAP_IO_PCI_BAR, PCIBAR_IO,
-				 PTNETMAP_IO_SIZE);
+				 PTNET_MDEV_IO_END);
 	if (ret) {
 		printf("ptnetmap_memdev: iobar allocation error %d\n", ret);
 		return ret;
