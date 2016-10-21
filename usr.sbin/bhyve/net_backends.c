@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2014-2015 Vincenzo Maffione
+ * Copyright (c) 2014-2016 Vincenzo Maffione
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -451,8 +451,8 @@ ptnetmap_ack_features(struct ptnetmap_state *ptn, uint32_t wanted_features)
 struct ptnetmap_state *
 get_ptnetmap(struct net_backend *be)
 {
+	struct netmap_priv *priv = be ? be->priv : NULL;
 	struct netmap_pools_info pi;
-	struct netmap_priv *priv;
 	struct nmreq req;
 	int err;
 
@@ -461,8 +461,6 @@ get_ptnetmap(struct net_backend *be)
 			!(priv->nmd->req.nr_flags & NR_PTNETMAP_HOST)) {
 		return NULL;
 	}
-
-	priv = be->priv;
 
 	nmreq_init(&req, priv->ifname);
 	req.nr_cmd = NETMAP_POOLS_INFO_GET;
