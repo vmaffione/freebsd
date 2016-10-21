@@ -100,7 +100,7 @@ ptnet_get_netmap_if(struct ptnet_softc *sc)
 }
 
 static int
-ptnet_regif(struct ptnet_softc *sc)
+ptnet_ptctl_create(struct ptnet_softc *sc)
 {
 	struct ptnetmap_cfgentry_bhyve *cfgentry;
 	struct pci_devinst *pi = sc->pi;
@@ -158,7 +158,7 @@ ptnet_regif(struct ptnet_softc *sc)
 }
 
 static int
-ptnet_unregif(struct ptnet_softc *sc)
+ptnet_ptctl_delete(struct ptnet_softc *sc)
 {
 	struct pci_devinst *pi = sc->pi;
 	struct vmctx *vmctx = pi->pi_vmctx;
@@ -181,25 +181,18 @@ ptnet_ptctl(struct ptnet_softc *sc, uint64_t cmd)
 	int ret = EINVAL;
 
 	switch (cmd) {
-	case PTNETMAP_PTCTL_REGIF:
-		/* Emulate a REGIF for the guest. */
-		ret = ptnet_regif(sc);
+	case PTNETMAP_PTCTL_CREATE:
+		/* React to a REGIF in the guest. */
+		ret = ptnet_ptctl_create(sc);
 		break;
 
-	case PTNETMAP_PTCTL_UNREGIF:
-		/* Emulate an UNREGIF for the guest. */
-		ret = ptnet_unregif(sc);
-		break;
-
-	case PTNETMAP_PTCTL_HOSTMEMID:
-		ret = ptnetmap_get_hostmemid(sc->ptbe);
-		break;
-
-	default:
+	case PTNETMAP_PTCTL_DELETE:
+		/* React to an UNREGIF in the guest. */
+		ret = ptnet_ptctl_delete(sc);
 		break;
 	}
 
-	sc->ioregs[PTNET_IO_PTSTS >> 2] = ret;
+	sc->ioregs[PTNET_IO_PTCTL >> 2] = ret;
 }
 
 static void
@@ -235,38 +228,39 @@ ptnet_bar_write(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 	offset &= PTNET_IO_MASK;
 	index = offset >> 2;
 
-	if (baridx == PTNETMAP_IO_PCI_BAR && offset < PTNET_IO_END) {
-		switch (offset) {
-		case PTNET_IO_PTFEAT:
-			value = ptnetmap_ack_features(sc->ptbe, value);
-			sc->ioregs[index] = value;
-			break;
-
-		case PTNET_IO_PTCTL:
-			ptnet_ptctl(sc, value);
-			break;
-
-		case PTNET_IO_CSBBAH:
-			sc->ioregs[index] = value;
-			break;
-
-		case PTNET_IO_CSBBAL:
-			sc->ioregs[index] = value;
-			ptnet_csb_mapping(sc);
-			break;
-
-		case PTNET_IO_VNET_HDR_LEN:
-			if (netbe_set_cap(sc->be, netbe_get_cap(sc->be),
-					  value) == 0) {
-				sc->ioregs[index] = value;
-			}
-			break;
-		}
+	if (baridx != PTNETMAP_IO_PCI_BAR || offset >= PTNET_IO_END) {
+		fprintf(stderr, "%s: Unexpected register write [bar %u, "
+			"offset %lx size %d value %lx]\n", __func__, baridx,
+			offset, size, value);
 		return;
 	}
 
-	fprintf(stderr, "%s: Unexpected register write [bar %u, offset %lx "
-		"size %d value %lx]\n", __func__, baridx, offset, size, value);
+	switch (offset) {
+	case PTNET_IO_PTFEAT:
+		value = ptnetmap_ack_features(sc->ptbe, value);
+		sc->ioregs[index] = value;
+		break;
+
+	case PTNET_IO_PTCTL:
+		ptnet_ptctl(sc, value);
+		break;
+
+	case PTNET_IO_CSBBAH:
+		sc->ioregs[index] = value;
+		break;
+
+	case PTNET_IO_CSBBAL:
+		sc->ioregs[index] = value;
+		ptnet_csb_mapping(sc);
+		break;
+
+	case PTNET_IO_VNET_HDR_LEN:
+		if (netbe_set_cap(sc->be, netbe_get_cap(sc->be),
+				  value) == 0) {
+			sc->ioregs[index] = value;
+		}
+		break;
+	}
 }
 
 static uint64_t
@@ -274,6 +268,7 @@ ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 	       int baridx, uint64_t offset, int size)
 {
 	struct ptnet_softc *sc = pi->pi_arg;
+	uint64_t index = offset >> 2;
 
 	if (baridx == pci_msix_table_bar(pi) ||
 			baridx == pci_msix_pba_bar(pi)) {
@@ -285,8 +280,14 @@ ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 
 	offset &= PTNET_IO_MASK;
 
-	if (baridx == PTNETMAP_IO_PCI_BAR && offset < PTNET_IO_END) {
-		switch (offset) {
+	if (baridx != PTNETMAP_IO_PCI_BAR || offset >= PTNET_IO_END) {
+		fprintf(stderr, "%s: Unexpected register read [bar %u, "
+			"offset %lx size %d]\n", __func__, baridx, offset,
+			size);
+		return 0;
+	}
+
+	switch (offset) {
 		case PTNET_IO_NIFP_OFS:
 		case PTNET_IO_NUM_TX_RINGS:
 		case PTNET_IO_NUM_RX_RINGS:
@@ -295,16 +296,14 @@ ptnet_bar_read(struct vmctx *ctx, int vcpu, struct pci_devinst *pi,
 			/* Fill in device registers with information about
 			 * nifp_offset, num_*x_rings, and num_*x_slots. */
 			ptnet_get_netmap_if(sc);
+			break;
 
-		default:
-			return sc->ioregs[offset >> 2];
-		}
+		case PTNET_IO_HOSTMEMID:
+			sc->ioregs[index] = ptnetmap_get_hostmemid(sc->ptbe);
+			break;
 	}
 
-	fprintf(stderr, "%s: Unexpected register read [bar %u, offset %lx "
-		"size %d]\n", __func__, baridx, offset, size);
-
-	return 0;
+	return sc->ioregs[index];
 }
 
 /* PCI device initialization. */
