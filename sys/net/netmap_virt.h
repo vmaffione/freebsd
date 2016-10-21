@@ -30,11 +30,6 @@
 #ifndef NETMAP_VIRT_H
 #define NETMAP_VIRT_H
 
-#define NETMAP_VIRT_CSB_SIZE   4096
-
-/* ptnetmap features */
-#define PTNETMAP_F_VNET_HDR        1
-
 /*
  * ptnetmap_memdev: device used to expose memory into the guest VM
  *
@@ -112,19 +107,6 @@ struct ptnetmap_cfgentry_bhyve {
 };
 
 /*
- * Function used to write ptnetmap_cfg to the nmreq.
- * The user-space application writes the pointer of ptnetmap_cfg
- * (user-space buffer) starting from nr_arg1 field, so that the kernel
- * can read it with copyin (copy_from_user). TODO remove
- */
-static inline void
-ptnetmap_write_cfg(struct nmreq *nmr, struct ptnetmap_cfg *cfg)
-{
-	uintptr_t *nmr_ptncfg = (uintptr_t *)&nmr->nr_arg1;
-	*nmr_ptncfg = (uintptr_t)cfg;
-}
-
-/*
  * Structure filled-in by the kernel when asked for allocator info
  * through NETMAP_POOLS_INFO_GET. Used by hypervisors supporting
  * ptnetmap.
@@ -143,6 +125,10 @@ struct netmap_pools_info {
 	uint32_t buf_pool_objsize;
 };
 
+/*
+ * Pass a pointer to a userspace buffer to be passed to kernelspace for write
+ * or read. Used by NETMAP_PT_HOST_CREATE and NETMAP_POOLS_INFO_GET.
+ */
 static inline void
 nmreq_pointer_put(struct nmreq *nmr, void *userptr)
 {
@@ -150,38 +136,30 @@ nmreq_pointer_put(struct nmreq *nmr, void *userptr)
 	*pp = (uintptr_t)userptr;
 }
 
-/* ptnetmap control commands */
-#define PTNETMAP_PTCTL_CONFIG	1
-#define PTNETMAP_PTCTL_FINALIZE	2
-#define PTNETMAP_PTCTL_IFNEW	3
-#define PTNETMAP_PTCTL_IFDELETE	4
-#define PTNETMAP_PTCTL_RINGSCREATE	5
-#define PTNETMAP_PTCTL_RINGSDELETE	6
-#define PTNETMAP_PTCTL_DEREF	7
-#define PTNETMAP_PTCTL_TXSYNC	8
-#define PTNETMAP_PTCTL_RXSYNC	9
-#define PTNETMAP_PTCTL_REGIF        10
-#define PTNETMAP_PTCTL_UNREGIF      11
-#define PTNETMAP_PTCTL_HOSTMEMID	12
-
+/* ptnetmap features */
+#define PTNETMAP_F_VNET_HDR        1
 
 /* I/O registers for the ptnet device. */
 #define PTNET_IO_PTFEAT		0
 #define PTNET_IO_PTCTL		4
-#define PTNET_IO_PTSTS		8
-#define PTNET_IO_MAC_LO		12
-#define PTNET_IO_MAC_HI		16
-#define PTNET_IO_CSBBAH         20
-#define PTNET_IO_CSBBAL         24
-#define PTNET_IO_NIFP_OFS	28
-#define PTNET_IO_NUM_TX_RINGS	32
-#define PTNET_IO_NUM_RX_RINGS	36
-#define PTNET_IO_NUM_TX_SLOTS	40
-#define PTNET_IO_NUM_RX_SLOTS	44
-#define PTNET_IO_VNET_HDR_LEN	48
+#define PTNET_IO_MAC_LO		8
+#define PTNET_IO_MAC_HI		12
+#define PTNET_IO_CSBBAH		16
+#define PTNET_IO_CSBBAL		20
+#define PTNET_IO_NIFP_OFS	24
+#define PTNET_IO_NUM_TX_RINGS	28
+#define PTNET_IO_NUM_RX_RINGS	32
+#define PTNET_IO_NUM_TX_SLOTS	36
+#define PTNET_IO_NUM_RX_SLOTS	40
+#define PTNET_IO_VNET_HDR_LEN	44
+#define PTNET_IO_HOSTMEMID	48
 #define PTNET_IO_END		52
 #define PTNET_IO_KICK_BASE	128
-#define PTNET_IO_MASK           0xff
+#define PTNET_IO_MASK		0xff
+
+/* ptnetmap control commands (values for PTCTL register) */
+#define PTNETMAP_PTCTL_CREATE		1
+#define PTNETMAP_PTCTL_DELETE		2
 
 /* If defined, CSB is allocated by the guest, not by the host. */
 #define PTNET_CSB_ALLOC
@@ -201,6 +179,7 @@ struct ptnet_ring {
 
 /* CSB for the ptnet device. */
 struct ptnet_csb {
+#define NETMAP_VIRT_CSB_SIZE   4096
 	struct ptnet_ring rings[NETMAP_VIRT_CSB_SIZE/sizeof(struct ptnet_ring)];
 };
 
