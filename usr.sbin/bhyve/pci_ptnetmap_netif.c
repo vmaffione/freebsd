@@ -181,10 +181,6 @@ ptnet_ptctl(struct ptnet_softc *sc, uint64_t cmd)
 	int ret = EINVAL;
 
 	switch (cmd) {
-	case PTNETMAP_PTCTL_CONFIG:
-		fprintf(stderr, "Ignoring deprecated CONFIG PTCTL\n");
-		break;
-
 	case PTNETMAP_PTCTL_REGIF:
 		/* Emulate a REGIF for the guest. */
 		ret = ptnet_regif(sc);
