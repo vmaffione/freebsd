@@ -74,7 +74,7 @@ net_genmac(struct pci_devinst *pi, uint8_t *macaddr)
 	    pi->pi_func, vmname);
 
 	MD5Init(&mdctx);
-	MD5Update(&mdctx, nstr, strlen(nstr));
+	MD5Update(&mdctx, nstr, (unsigned int)strlen(nstr));
 	MD5Final(digest, &mdctx);
 
 	macaddr[0] = 0x00;

@@ -41,10 +41,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/ioctl.h>
 #include <machine/atomic.h>
 #include <net/ethernet.h>
+#ifdef WITH_NETMAP
 #ifndef NETMAP_WITH_LIBS
 #define NETMAP_WITH_LIBS
 #endif
 #include <net/netmap_user.h>
+#endif /* WITH_NETMAP */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -114,16 +116,16 @@ struct pci_vtnet_softc {
 
 	uint64_t	vsc_features;	/* negotiated features */
 	
-	struct virtio_net_config vsc_config;
-
 	pthread_mutex_t	rx_mtx;
-	int		rx_vhdrlen;
+	unsigned int	rx_vhdrlen;
 	int		rx_merge;	/* merged rx bufs in use */
 
 	pthread_t 	tx_tid;
 	pthread_mutex_t	tx_mtx;
 	pthread_cond_t	tx_cond;
 	int		tx_in_progress;
+	struct virtio_net_config vsc_config;
+
 };
 
 static void pci_vtnet_reset(void *);
@@ -206,7 +208,7 @@ pci_vtnet_reset(void *vsc)
  * is no need for it to be per-vtnet or locked.
  */
 
-void
+static void
 pci_vtnet_rx_discard(struct pci_vtnet_softc *sc, struct iovec *iov)
 {
 	/*
@@ -264,6 +266,10 @@ pci_vtnet_rx(struct pci_vtnet_softc *sc)
 
 		len = netbe_recv(sc->vsc_be, iov, n);
 
+		if (len < 0) {
+			break;
+		}
+
 		if (len == 0) {
 			/*
 			 * No more packets, but still some avail ring
@@ -277,7 +283,7 @@ pci_vtnet_rx(struct pci_vtnet_softc *sc)
 		/*
 		 * Release this chain and handle more chains.
 		 */
-		vq_relchain(vq, idx, len + sc->rx_vhdrlen);
+		vq_relchain(vq, idx, (uint32_t)len + sc->rx_vhdrlen);
 	} while (vq_has_descs(vq));
 
 	/* Interrupt if needed, including for NOTIFY_ON_EMPTY. */
@@ -289,6 +295,7 @@ pci_vtnet_rx_callback(int fd, enum ev_type type, void *param)
 {
 	struct pci_vtnet_softc *sc = param;
 
+	(void)fd; (void)type;
 	pthread_mutex_lock(&sc->rx_mtx);
 	pci_vtnet_rx(sc);
 	pthread_mutex_unlock(&sc->rx_mtx);
@@ -314,7 +321,7 @@ pci_vtnet_proctx(struct pci_vtnet_softc *sc, struct vqueue_info *vq)
 {
 	struct iovec iov[VTNET_MAXSEGS + 1];
 	int i, n;
-	int len;
+	uint32_t len;
 	uint16_t idx;
 
 	/*

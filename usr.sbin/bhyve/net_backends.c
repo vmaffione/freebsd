@@ -56,12 +56,6 @@
 
 #include <sys/linker_set.h>
 
-#define NETMAP_WITH_LIBS
-#include <net/netmap_user.h>
-#if (NETMAP_API < 11)
-#error "Netmap API version must be >= 11"
-#endif
-
 /*
  * Each network backend registers a set of function pointers that are
  * used to implement the net backends API.
@@ -84,7 +78,7 @@ struct net_backend {
 	 * the packet to send. 'len' is the length of whole packet in bytes.
 	 */
 	int (*send)(struct net_backend *be, struct iovec *iov,
-			int iovcnt, int len, int more);
+			int iovcnt, uint32_t len, int more);
 
 	/*
 	 * Called to serve guest receive request. When the function
@@ -122,7 +116,9 @@ struct net_backend {
 	void *priv;	/* Pointer to backend-specific data. */
 };
 
-SET_DECLARE(net_backend_set, struct net_backend);
+SET_DECLARE(net_backend_s, struct net_backend);
+
+#define VNET_HDR_LEN	sizeof(struct virtio_net_rxhdr)
 
 #define WPRINTF(params) printf params
 
@@ -131,7 +127,7 @@ static int
 netbe_null_init(struct net_backend *be, const char *devname,
 			net_backend_cb_t cb, void *param)
 {
-	D("initializing null backend");
+	(void)devname; (void)cb; (void)param;
 	be->fd = -1;
 	return 0;
 }
@@ -139,13 +135,13 @@ netbe_null_init(struct net_backend *be, const char *devname,
 static void
 netbe_null_cleanup(struct net_backend *be)
 {
-	D("");
+	(void)be;
 }
 
 static uint64_t
 netbe_null_get_cap(struct net_backend *be)
 {
-	D("");
+	(void)be;
 	return 0;
 }
 
@@ -153,25 +149,27 @@ static int
 netbe_null_set_cap(struct net_backend *be, uint64_t features,
 			unsigned vnet_hdr_len)
 {
-	D("setting 0x%lx", features);
+	(void)be; (void)features; (void)vnet_hdr_len;
 	return 0;
 }
 
 static int
 netbe_null_send(struct net_backend *be, struct iovec *iov,
-	int iovcnt, int len, int more)
+	int iovcnt, uint32_t len, int more)
 {
+	(void)be; (void)iov; (void)iovcnt; (void)len; (void)more;
 	return 0; /* pretend we send */
 }
 
 static int
 netbe_null_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 {
+	(void)be; (void)iov; (void)iovcnt;
 	fprintf(stderr, "netbe_null_recv called ?\n");
 	return -1; /* never called, i believe */
 }
 
-static struct net_backend null_backend = {
+static struct net_backend n_be = {
 	.name = "null",
 	.init = netbe_null_init,
 	.cleanup = netbe_null_cleanup,
@@ -181,7 +179,7 @@ static struct net_backend null_backend = {
 	.set_cap = netbe_null_set_cap,
 };
 
-DATA_SET(net_backend_set, null_backend);
+DATA_SET(net_backend_s, n_be);
 
 
 /* the tap backend */
@@ -264,11 +262,12 @@ error:
  * Called to send a buffer chain out to the tap device
  */
 static int
-tap_send(struct net_backend *be, struct iovec *iov, int iovcnt, int len,
+tap_send(struct net_backend *be, struct iovec *iov, int iovcnt, uint32_t len,
 	int more)
 {
 	static char pad[60]; /* all zero bytes */
 
+	(void)more;
 	/*
 	 * If the length is < 60, pad out to that and add the
 	 * extra zero'd segment to the iov. It is guaranteed that
@@ -276,11 +275,11 @@ tap_send(struct net_backend *be, struct iovec *iov, int iovcnt, int len,
 	 */
 	if (len < 60) {
 		iov[iovcnt].iov_base = pad;
-		iov[iovcnt].iov_len = 60 - len;
+		iov[iovcnt].iov_len = (size_t)(60 - len);
 		iovcnt++;
 	}
 
-	return writev(be->fd, iov, iovcnt);
+	return (int)writev(be->fd, iov, iovcnt);
 }
 
 static int
@@ -291,7 +290,7 @@ tap_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 	/* Should never be called without a valid tap fd */
 	assert(be->fd != -1);
 
-	ret = readv(be->fd, iov, iovcnt);
+	ret = (int)readv(be->fd, iov, iovcnt);
 
 	if (ret < 0 && errno == EWOULDBLOCK) {
 		return 0;
@@ -303,6 +302,7 @@ tap_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 static uint64_t
 tap_get_cap(struct net_backend *be)
 {
+	(void)be;
 	return 0; // nothing extra
 }
 
@@ -310,6 +310,7 @@ static int
 tap_set_cap(struct net_backend *be, uint64_t features,
 		 unsigned vnet_hdr_len)
 {
+	(void)be;
 	return (features || vnet_hdr_len) ? -1 : 0;
 }
 
@@ -323,8 +324,9 @@ static struct net_backend tap_backend = {
 	.set_cap = tap_set_cap,
 };
 
-DATA_SET(net_backend_set, tap_backend);
+DATA_SET(net_backend_s, tap_backend);
 
+#ifdef WITH_NETMAP
 
 /*
  * The netmap backend
@@ -337,8 +339,6 @@ DATA_SET(net_backend_set, tap_backend);
 		VIRTIO_NET_F_GUEST_TSO6 | VIRTIO_NET_F_GUEST_UFO)
 
 #define NETMAP_POLLMASK (POLLIN | POLLRDNORM | POLLRDBAND)
-
-#define VNET_HDR_LEN	sizeof(struct virtio_net_rxhdr)
 
 struct netmap_priv {
 	char ifname[IFNAMSIZ];
@@ -662,7 +662,7 @@ pkt_copy(const void *_src, void *_dst, int l)
 
 static int
 netmap_send(struct net_backend *be, struct iovec *iov,
-	    int iovcnt, int size, int more)
+	    int iovcnt, uint32_t size, int more)
 {
 	struct netmap_priv *priv = be->priv;
 	struct netmap_ring *ring;
@@ -816,7 +816,9 @@ static struct net_backend netmap_backend = {
 	.set_cap = netmap_set_cap,
 };
 
-DATA_SET(net_backend_set, netmap_backend);
+DATA_SET(net_backend_s, netmap_backend);
+
+#endif /* WITH_NETMAP */
 
 /*
  * make sure a backend is properly initialized
@@ -894,7 +896,7 @@ netbe_init(const char *devname, net_backend_cb_t cb, void *param)
 	struct net_backend **pbe, *ret, *be = NULL;
 	int err;
 
-	SET_FOREACH(pbe, net_backend_set) {
+	SET_FOREACH(pbe, net_backend_s) {
 		netbe_fix(*pbe); /* make sure we have all fields */
 		if (netbe_name_match((*pbe)->name, devname)) {
 			be = *pbe;
@@ -960,7 +962,7 @@ netbe_set_cap(struct net_backend *be, uint64_t features,
 }
 
 static __inline struct iovec *
-iov_trim(struct iovec *iov, int *iovcnt, int tlen)
+iov_trim(struct iovec *iov, int *iovcnt, unsigned int tlen)
 {
 	struct iovec *riov;
 
@@ -981,7 +983,7 @@ iov_trim(struct iovec *iov, int *iovcnt, int tlen)
 }
 
 void
-netbe_send(struct net_backend *be, struct iovec *iov, int iovcnt, int len,
+netbe_send(struct net_backend *be, struct iovec *iov, int iovcnt, uint32_t len,
 	   int more)
 {
 	if (be == NULL)
@@ -1000,10 +1002,13 @@ netbe_send(struct net_backend *be, struct iovec *iov, int iovcnt, int len,
 	be->send(be, iov, iovcnt, len, more);
 }
 
+/*
+ * can return -1 in case of errors
+ */
 int
 netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 {
-	int hlen = 0;
+	unsigned int hlen = 0;
 	int ret;
 
 	if (be == NULL)

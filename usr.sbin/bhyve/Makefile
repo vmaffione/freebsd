@@ -53,6 +53,7 @@ DPADD=	${LIBVMMAPI} ${LIBMD} ${LIBUTIL} ${LIBPTHREAD}
 LDADD=	-lvmmapi -lmd -lutil -lpthread
 
 CFLAGS=-I/home/vmaffione/git/netmap/sys
+CFLAGS+= -DWITH_NETMAP
 
 WARNS?=	2
 

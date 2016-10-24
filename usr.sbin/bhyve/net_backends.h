@@ -28,8 +28,17 @@
 #define __NET_BACKENDS_H__
 
 #include <stdint.h>
+
+#ifdef WITH_NETMAP
 #include <net/netmap.h>
 #include <net/netmap_virt.h>
+#define NETMAP_WITH_LIBS
+#include <net/netmap_user.h>
+#if (NETMAP_API < 11)
+#error "Netmap API version must be >= 11"
+#endif
+#endif /* WITH_NETMAP */
+
 #include "mevent.h"
 
 extern int netmap_ioctl_counter;
@@ -46,7 +55,7 @@ uint64_t netbe_get_cap(struct net_backend *be);
 int	 netbe_set_cap(struct net_backend *be, uint64_t cap,
 			    unsigned vnet_hdr_len);
 void	netbe_send(struct net_backend *be, struct iovec *iov,
-		   int iovcnt, int len, int more);
+		   int iovcnt, uint32_t len, int more);
 int	netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt);
 
 
@@ -106,6 +115,7 @@ struct ptnetmap_state {
 	void		*mem;
 };
 
+#ifdef WITH_NETMAP
 /* Used to get read-only info. */
 struct netmap_if_info {
 	uint32_t nifp_offset;
@@ -124,7 +134,7 @@ uint32_t ptnetmap_ack_features(struct ptnetmap_state *ptn,
 int ptnetmap_get_hostmemid(struct ptnetmap_state *ptn);
 int ptnetmap_create(struct ptnetmap_state *ptn, struct ptnetmap_cfg *cfg);
 int ptnetmap_delete(struct ptnetmap_state *ptn);
-
+#endif /* WITH_NETMAP */
 
 #include "pci_emul.h"
 int net_parsemac(char *mac_str, uint8_t *mac_addr);

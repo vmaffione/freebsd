@@ -24,6 +24,8 @@
  * SUCH DAMAGE.
  */
 
+#ifdef WITH_NETMAP
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -335,3 +337,5 @@ struct pci_devemu pci_de_ptnetmap = {
 	.pe_barread =	ptn_pci_read
 };
 PCI_EMUL_SET(pci_de_ptnetmap);
+
+#endif /* WITH_NETMAP */
