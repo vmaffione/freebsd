@@ -70,6 +70,7 @@ CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/e1000
 CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/mii
 CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/usb/controller
 CFLAGS+= -I${BHYVE_SYSDIR}/sys/
+CFLAGS+= -DWITH_NETMAP
 
 WARNS?=	2
 

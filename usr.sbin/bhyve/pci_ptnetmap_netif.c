@@ -29,6 +29,8 @@
  * with netmap backend.
  */
 
+#ifdef WITH_NETMAP
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -405,3 +407,5 @@ struct pci_devemu pci_de_ptnet = {
 	.pe_barread =	ptnet_bar_read,
 };
 PCI_EMUL_SET(pci_de_ptnet);
+
+#endif /* WITH_NETMAP */
