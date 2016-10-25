@@ -578,7 +578,7 @@ pci_vtnet_neg_features(void *vsc, uint64_t negotiated_features)
 	netbe_set_cap(sc->vsc_be, negotiated_features, sc->rx_vhdrlen);
 }
 
-struct pci_devemu pci_de_vnet = {
+static struct pci_devemu pci_de_vnet = {
 	.pe_emu = 	"virtio-net",
 	.pe_init =	pci_vtnet_init,
 	.pe_barwrite =	vi_pci_write,
