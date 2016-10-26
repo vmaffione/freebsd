@@ -886,39 +886,51 @@ netbe_name_match(const char *keys, const char *name)
 	return good;
 }
 
+/*
+ * Initialize a backend and attach to the frontend.
+ * This is called during frontend initialization.
+ * devname is the backend-name as supplied on the command line,
+ * 	e.g. -s 2:0,frontend-name,backend-name[,other-args]
+ * cb is the receive callback supplied by the frontend,
+ *	and it is invoked in the event loop when a receive
+ *	event is generated in the hypervisor,
+ * param is a pointer to the frontend, and normally used as
+ *	the argument for the callback.
+ */
 struct net_backend *
 netbe_init(const char *devname, net_backend_cb_t cb, void *param)
 {
-	/*
-	 * Choose the network backend depending on the user
-	 * provided device name.
-	 */
-	struct net_backend **pbe, *ret, *be = NULL;
+	struct net_backend **pbe, *be, *tbe = NULL;
 	int err;
 
+	/*
+	 * Find the network backend depending on the user-provided
+	 * device name. net_backend_s is built using a linker set.
+	 */
 	SET_FOREACH(pbe, net_backend_s) {
-		netbe_fix(*pbe); /* make sure we have all fields */
 		if (netbe_name_match((*pbe)->name, devname)) {
-			be = *pbe;
+			tbe = *pbe;
 			break;
 		}
 	}
-	if (be == NULL)
+	if (tbe == NULL)
 		return NULL; /* or null backend ? */
-	ret = calloc(1, sizeof(*ret));
-	*ret = *be;
-	ret->fd = -1;
-	ret->priv = NULL;
-	ret->sc = param;
-	ret->be_vnet_hdr_len = 0;
-	ret->fe_vnet_hdr_len = 0;
+	be = calloc(1, sizeof(*be));
+	*be = *tbe;	/* copy the template */
+	netbe_fix(be); /* make sure we have all fields */
+	be->fd = -1;
+	be->priv = NULL;
+	be->sc = param;
+	be->be_vnet_hdr_len = 0;
+	be->fe_vnet_hdr_len = 0;
 
-	err = be->init(ret, devname, cb, param);
+	/* initialize the backend */
+	err = be->init(be, devname, cb, param);
 	if (err) {
-		free(ret);
-		ret = NULL;
+		free(be);
+		be = NULL;
 	}
-	return ret;
+	return be;
 }
 
 void
@@ -1008,7 +1020,7 @@ netbe_send(struct net_backend *be, struct iovec *iov, int iovcnt, uint32_t len,
 int
 netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 {
-	unsigned int hlen = 0;
+	unsigned int hlen = 0; /* length of prepended virtio-net header */
 	int ret;
 
 	if (be == NULL)
