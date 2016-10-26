@@ -370,6 +370,14 @@ pci_vtnet_tx_thread(void *param)
 	struct vqueue_info *vq;
 	int error;
 
+	{
+		struct pci_devinst *pi = sc->vsc_vs.vs_pi;
+		char tname[MAXCOMLEN + 1];
+		snprintf(tname, sizeof(tname), "vtnet-%d:%d tx", pi->pi_slot,
+				pi->pi_func);
+		pthread_set_name_np(pthread_self(), tname);
+	}
+
 	vq = &sc->vsc_queues[VTNET_TXQ];
 
 	/*
@@ -426,7 +434,6 @@ pci_vtnet_ping_ctlq(void *vsc, struct vqueue_info *vq)
 static int
 pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 {
-	char tname[MAXCOMLEN + 1];
 	struct pci_vtnet_softc *sc;
 	char *devname;
 	char *vtopts;
@@ -522,9 +529,6 @@ pci_vtnet_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	pthread_mutex_init(&sc->tx_mtx, NULL);
 	pthread_cond_init(&sc->tx_cond, NULL);
 	pthread_create(&sc->tx_tid, NULL, pci_vtnet_tx_thread, (void *)sc);
-	snprintf(tname, sizeof(tname), "vtnet-%d:%d tx", pi->pi_slot,
-	    pi->pi_func);
-        pthread_set_name_np(sc->tx_tid, tname);
 
 	return (0);
 }
