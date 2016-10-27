@@ -52,12 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/ioctl.h>
 #include <machine/atomic.h>
 #include <net/ethernet.h>
-#ifdef WITH_NETMAP
-#ifndef NETMAP_WITH_LIBS
-#define NETMAP_WITH_LIBS
-#endif
-#include <net/netmap_user.h>
-#endif /* WITH_NETMAP */
+#include <net/if.h> /* IFNAMSIZ */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -215,21 +210,6 @@ pci_vtnet_reset(void *vsc)
 }
 
 static void
-pci_vtnet_rx_discard(struct pci_vtnet_softc *sc, struct iovec *iov)
-{
-	/*
-	 * MP note: the dummybuf is only used to discard frames,
-	 * so there is no need for it to be per-vtnet or locked.
-	 * We only make it large enough for TSO-sized segment.
-	 */
-	static uint8_t dummybuf[65536+64];
-
-	iov[0].iov_base = dummybuf;
-	iov[0].iov_len = sizeof(dummybuf);
-	netbe_recv(sc->vsc_be, iov, 1);
-}
-
-static void
 pci_vtnet_rx(struct pci_vtnet_softc *sc)
 {
 	struct iovec iov[VTNET_MAXSEGS + 1];
@@ -242,7 +222,7 @@ pci_vtnet_rx(struct pci_vtnet_softc *sc)
 		 * The rx ring has not yet been set up or the guest is
 		 * resetting the device. Drop the packet and try later.
 		 */
-		pci_vtnet_rx_discard(sc, iov);
+		netbe_rx_discard(sc->vsc_be);
 		return;
 	}
 
@@ -252,7 +232,7 @@ pci_vtnet_rx(struct pci_vtnet_softc *sc)
 		 * No available rx buffers. Drop the packet and try later.
 		 * Interrupt on empty, if that's negotiated.
 		 */
-		pci_vtnet_rx_discard(sc, iov);
+		netbe_rx_discard(sc->vsc_be);
 		vq_endchains(vq, 1);
 		return;
 	}

@@ -1057,3 +1057,26 @@ netbe_recv(struct net_backend *be, struct iovec *iov, int iovcnt)
 
 	return ret;
 }
+
+/*
+ * Read a packet from the backend and discard it.
+ * Returns the size of the discarded packet or zero if no packet was available.
+ * A negative error code is returned in case of read error.
+ */
+int
+netbe_rx_discard(struct net_backend *be)
+{
+	/*
+	 * MP note: the dummybuf is only used to discard frames,
+	 * so there is no need for it to be per-vtnet or locked.
+	 * We only make it large enough for TSO-sized segment.
+	 */
+	static uint8_t dummybuf[65536+64];
+	struct iovec iov;
+
+	iov.iov_base = dummybuf;
+	iov.iov_len = sizeof(dummybuf);
+
+	return netbe_recv(be, &iov, 1);
+}
+
