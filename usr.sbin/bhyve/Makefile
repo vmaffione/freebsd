@@ -35,6 +35,7 @@ SRCS=	\
 	pci_virtio_block.c	\
 	pci_virtio_net.c	\
 	pci_virtio_rnd.c	\
+	pci_e82545.c		\
 	pci_uart.c		\
 	pm.c			\
 	post.c			\
@@ -54,6 +55,8 @@ LDADD=	-lvmmapi -lmd -lutil -lpthread
 
 CFLAGS=-I/home/vmaffione/git/netmap/sys
 CFLAGS+= -DWITH_NETMAP
+CFLAGS+=-I../../sys/dev/e1000
+CFLAGS+=-I../../sys/dev/mii
 
 WARNS?=	2
 
