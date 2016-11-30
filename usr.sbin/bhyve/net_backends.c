@@ -349,8 +349,6 @@ struct netmap_priv {
 	pthread_t evloop_tid;
 	net_backend_cb_t cb;
 	void *cb_param;
-
-	struct ptnetmap_state ptnetmap;
 };
 
 static void *
@@ -439,131 +437,6 @@ netmap_set_cap(struct net_backend *be, uint64_t features,
 	return netmap_set_vnet_hdr_len(be, vnet_hdr_len);
 }
 
-/* Store and return the features we agreed upon. */
-uint32_t
-ptnetmap_ack_features(struct ptnetmap_state *ptn, uint32_t wanted_features)
-{
-	ptn->acked_features = ptn->features & wanted_features;
-
-	return ptn->acked_features;
-}
-
-struct ptnetmap_state *
-get_ptnetmap(struct net_backend *be)
-{
-	struct netmap_priv *priv = be ? be->priv : NULL;
-	struct netmap_pools_info pi;
-	struct nmreq req;
-	int err;
-
-	/* Check that this is a ptnetmap backend. */
-	if (!be || be->set_cap != netmap_set_cap ||
-			!(priv->nmd->req.nr_flags & NR_PTNETMAP_HOST)) {
-		return NULL;
-	}
-
-	nmreq_init(&req, priv->ifname);
-	req.nr_cmd = NETMAP_POOLS_INFO_GET;
-	nmreq_pointer_put(&req, &pi);
-	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
-	if (err) {
-		return NULL;
-	}
-
-	err = ptn_memdev_attach(priv->nmd->mem, &pi);
-	if (err) {
-		return NULL;
-	}
-
-	return &priv->ptnetmap;
-}
-
-int
-ptnetmap_get_netmap_if(struct ptnetmap_state *ptn, struct netmap_if_info *nif)
-{
-	struct netmap_priv *priv = ptn->netmap_priv;
-
-	memset(nif, 0, sizeof(*nif));
-	if (priv->nmd == NULL) {
-		return EINVAL;
-	}
-
-	nif->nifp_offset = priv->nmd->req.nr_offset;
-	nif->num_tx_rings = priv->nmd->req.nr_tx_rings;
-	nif->num_rx_rings = priv->nmd->req.nr_rx_rings;
-	nif->num_tx_slots = priv->nmd->req.nr_tx_slots;
-	nif->num_rx_slots = priv->nmd->req.nr_rx_slots;
-
-	return 0;
-}
-
-int
-ptnetmap_get_hostmemid(struct ptnetmap_state *ptn)
-{
-	struct netmap_priv *priv = ptn->netmap_priv;
-
-	if (priv->nmd == NULL) {
-		return EINVAL;
-	}
-
-	return priv->memid;
-}
-
-int
-ptnetmap_create(struct ptnetmap_state *ptn, struct ptnetmap_cfg *cfg)
-{
-	struct netmap_priv *priv = ptn->netmap_priv;
-	struct nmreq req;
-	int err;
-
-	if (ptn->running) {
-		return 0;
-	}
-
-	/* XXX We should stop the netmap evloop here. */
-
-	/* Ask netmap to create kthreads for this interface. */
-	nmreq_init(&req, priv->ifname);
-	nmreq_pointer_put(&req, cfg);
-	req.nr_cmd = NETMAP_PT_HOST_CREATE;
-	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
-	if (err) {
-		fprintf(stderr, "%s: Unable to create ptnetmap kthreads on "
-			"%s [errno=%d]", __func__, priv->ifname, errno);
-		return err;
-	}
-
-	ptn->running = 1;
-
-	return 0;
-}
-
-int
-ptnetmap_delete(struct ptnetmap_state *ptn)
-{
-	struct netmap_priv *priv = ptn->netmap_priv;
-	struct nmreq req;
-	int err;
-
-	if (!ptn->running) {
-		return 0;
-	}
-
-	/* Ask netmap to delete kthreads for this interface. */
-	nmreq_init(&req, priv->ifname);
-	req.nr_cmd = NETMAP_PT_HOST_DELETE;
-	err = ioctl(priv->nmd->fd, NIOCREGIF, &req);
-	if (err) {
-		fprintf(stderr, "%s: Unable to create ptnetmap kthreads on "
-			"%s [errno=%d]", __func__, priv->ifname, errno);
-		return err;
-	}
-
-	ptn->running = 0;
-
-	return 0;
-}
-
 static int
 netmap_init(struct net_backend *be, const char *devname,
 	    net_backend_cb_t cb, void *param)
@@ -571,7 +444,6 @@ netmap_init(struct net_backend *be, const char *devname,
 	const char *ndname = "/dev/netmap";
 	struct netmap_priv *priv = NULL;
 	struct nmreq req;
-	int ptnetmap = (cb == NULL);
 
 	priv = calloc(1, sizeof(struct netmap_priv));
 	if (priv == NULL) {
@@ -583,7 +455,7 @@ netmap_init(struct net_backend *be, const char *devname,
 	priv->ifname[sizeof(priv->ifname) - 1] = '\0';
 
 	memset(&req, 0, sizeof(req));
-	req.nr_flags = ptnetmap ? NR_PTNETMAP_HOST : 0;
+	req.nr_flags = 0;
 
 	priv->nmd = nm_open(priv->ifname, &req, NETMAP_NO_TX_POLL, NULL);
 	if (priv->nmd == NULL) {
@@ -602,15 +474,7 @@ netmap_init(struct net_backend *be, const char *devname,
 	be->fd = priv->nmd->fd;
 	be->priv = priv;
 
-	priv->ptnetmap.netmap_priv = priv;
-	priv->ptnetmap.features = 0;
-	priv->ptnetmap.acked_features = 0;
-	priv->ptnetmap.running = 0;
-	if (ptnetmap) {
-		if (netmap_has_vnet_hdr_len(be, VNET_HDR_LEN)) {
-			priv->ptnetmap.features |= PTNETMAP_F_VNET_HDR;
-		}
-	} else {
+	{
 		char tname[40];
 
 		/* Create a thread for netmap poll. */
@@ -628,9 +492,6 @@ netmap_cleanup(struct net_backend *be)
 	struct netmap_priv *priv = be->priv;
 
 	if (be->priv) {
-		if (priv->ptnetmap.running) {
-			ptnetmap_delete(&priv->ptnetmap);
-		}
 		nm_close(priv->nmd);
 		free(be->priv);
 		be->priv = NULL;
