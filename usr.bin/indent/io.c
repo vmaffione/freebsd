@@ -1,4 +1,4 @@
-/*
+/*-
  * Copyright (c) 1985 Sun Microsystems, Inc.
  * Copyright (c) 1980, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -200,6 +200,7 @@ dump_line(void)
 				break;
 			    case '\\':
 				putc('\\', output);
+				/* add a backslash to escape the '\' */
 			    default:
 				putc(*follow, output);
 			    }
@@ -224,8 +225,9 @@ dump_line(void)
 		char *com_st = s_com;
 
 		target += ps.comment_delta;
-		while (*com_st == '\t')
-		    com_st++, target += 8;	/* ? */
+		while (*com_st == '\t')	/* consider original indentation in
+					 * case this is a box comment */
+		    com_st++, target += 8;
 		while (target <= 0)
 		    if (*com_st == ' ')
 			target++, com_st++;
@@ -241,7 +243,7 @@ dump_line(void)
 		}
 		while (e_com > com_st && isspace(e_com[-1]))
 		    e_com--;
-		cur_col = pad_output(cur_col, target);
+		(void)pad_output(cur_col, target);
 		fwrite(com_st, e_com - com_st, 1, output);
 		ps.comment_delta = ps.n_comment_delta;
 		++ps.com_lines;	/* count lines with comments */
@@ -276,7 +278,8 @@ inhibit_newline:
     *(e_com = s_com = combuf + 1) = '\0';
     ps.ind_level = ps.i_l_follow;
     ps.paren_level = ps.p_l_follow;
-    paren_target = -ps.paren_indents[ps.paren_level - 1];
+    if (ps.paren_level > 0)
+	paren_target = -ps.paren_indents[ps.paren_level - 1];
     not_first_line = 1;
 }
 
@@ -369,7 +372,7 @@ fill_buffer(void)
     }
     buf_ptr = in_buffer;
     buf_end = p;
-    if (p[-2] == '/' && p[-3] == '*') {
+    if (p - in_buffer > 2 && p[-2] == '/' && p[-3] == '*') {
 	if (in_buffer[3] == 'I' && strncmp(in_buffer, "/**INDENT**", 11) == 0)
 	    fill_buffer();	/* flush indent error message */
 	else {
@@ -629,7 +632,7 @@ parsefont(struct fstate *f, const char *s0)
     const char *s = s0;
     int         sizedelta = 0;
 
-    memset(f, 0, sizeof(struct fstate));
+    memset(f, '\0', sizeof(*f));
     while (*s) {
 	if (isdigit(*s))
 	    f->size = f->size * 10 + *s - '0';

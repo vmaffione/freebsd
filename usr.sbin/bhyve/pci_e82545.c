@@ -2209,7 +2209,7 @@ e82545_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	DPRINTF("Loading with options: %s\r\n", opts);
 
 	/* Setup our softc */
-	sc = calloc(sizeof(*sc), 1);
+	sc = calloc(1, sizeof(*sc));
 
 	pi->pi_arg = sc;
 	sc->esc_pi = pi;

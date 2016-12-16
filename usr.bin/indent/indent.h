@@ -1,4 +1,4 @@
-/*
+/*-
  * Copyright (c) 2001 Jens Schweikhardt
  * All rights reserved.
  *
@@ -28,7 +28,8 @@
 __FBSDID("$FreeBSD$");
 #endif
 
-void	addkey(char *, int);
+void	add_typename(const char *);
+void	alloc_typenames(void);
 int	compute_code_target(void);
 int	compute_label_target(void);
 int	count_spaces(int, char *);

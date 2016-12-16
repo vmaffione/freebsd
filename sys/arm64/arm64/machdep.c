@@ -192,9 +192,12 @@ fill_fpregs(struct thread *td, struct fpreg *regs)
 		 */
 		vfp_save_state(td, pcb);
 
-		memcpy(regs->fp_q, pcb->pcb_vfp, sizeof(regs->fp_q));
-		regs->fp_cr = pcb->pcb_fpcr;
-		regs->fp_sr = pcb->pcb_fpsr;
+		KASSERT(pcb->pcb_fpusaved == &pcb->pcb_fpustate,
+		    ("Called fill_fpregs while the kernel is using the VFP"));
+		memcpy(regs->fp_q, pcb->pcb_fpustate.vfp_regs,
+		    sizeof(regs->fp_q));
+		regs->fp_cr = pcb->pcb_fpustate.vfp_fpcr;
+		regs->fp_sr = pcb->pcb_fpustate.vfp_fpsr;
 	} else
 #endif
 		memset(regs->fp_q, 0, sizeof(regs->fp_q));
@@ -208,9 +211,11 @@ set_fpregs(struct thread *td, struct fpreg *regs)
 	struct pcb *pcb;
 
 	pcb = td->td_pcb;
-	memcpy(pcb->pcb_vfp, regs->fp_q, sizeof(regs->fp_q));
-	pcb->pcb_fpcr = regs->fp_cr;
-	pcb->pcb_fpsr = regs->fp_sr;
+	KASSERT(pcb->pcb_fpusaved == &pcb->pcb_fpustate,
+	    ("Called set_fpregs while the kernel is using the VFP"));
+	memcpy(pcb->pcb_fpustate.vfp_regs, regs->fp_q, sizeof(regs->fp_q));
+	pcb->pcb_fpustate.vfp_fpcr = regs->fp_cr;
+	pcb->pcb_fpustate.vfp_fpsr = regs->fp_sr;
 #endif
 	return (0);
 }
@@ -334,10 +339,14 @@ get_fpcontext(struct thread *td, mcontext_t *mcp)
 		 */
 		vfp_save_state(td, curpcb);
 
-		memcpy(mcp->mc_fpregs.fp_q, curpcb->pcb_vfp,
+		KASSERT(curpcb->pcb_fpusaved == &curpcb->pcb_fpustate,
+		    ("Called get_fpcontext while the kernel is using the VFP"));
+		KASSERT((curpcb->pcb_fpflags & ~PCB_FP_USERMASK) == 0,
+		    ("Non-userspace FPU flags set in get_fpcontext"));
+		memcpy(mcp->mc_fpregs.fp_q, curpcb->pcb_fpustate.vfp_regs,
 		    sizeof(mcp->mc_fpregs));
-		mcp->mc_fpregs.fp_cr = curpcb->pcb_fpcr;
-		mcp->mc_fpregs.fp_sr = curpcb->pcb_fpsr;
+		mcp->mc_fpregs.fp_cr = curpcb->pcb_fpustate.vfp_fpcr;
+		mcp->mc_fpregs.fp_sr = curpcb->pcb_fpustate.vfp_fpsr;
 		mcp->mc_fpregs.fp_flags = curpcb->pcb_fpflags;
 		mcp->mc_flags |= _MC_FP_VALID;
 	}
@@ -363,11 +372,13 @@ set_fpcontext(struct thread *td, mcontext_t *mcp)
 		 */
 		vfp_discard(td);
 
-		memcpy(curpcb->pcb_vfp, mcp->mc_fpregs.fp_q,
+		KASSERT(curpcb->pcb_fpusaved == &curpcb->pcb_fpustate,
+		    ("Called set_fpcontext while the kernel is using the VFP"));
+		memcpy(curpcb->pcb_fpustate.vfp_regs, mcp->mc_fpregs.fp_q,
 		    sizeof(mcp->mc_fpregs));
-		curpcb->pcb_fpcr = mcp->mc_fpregs.fp_cr;
-		curpcb->pcb_fpsr = mcp->mc_fpregs.fp_sr;
-		curpcb->pcb_fpflags = mcp->mc_fpregs.fp_flags;
+		curpcb->pcb_fpustate.vfp_fpcr = mcp->mc_fpregs.fp_cr;
+		curpcb->pcb_fpustate.vfp_fpsr = mcp->mc_fpregs.fp_sr;
+		curpcb->pcb_fpflags = mcp->mc_fpregs.fp_flags & PCB_FP_USERMASK;
 	}
 
 	critical_exit();
@@ -416,8 +427,17 @@ cpu_flush_dcache(void *ptr, size_t len)
 int
 cpu_est_clockrate(int cpu_id, uint64_t *rate)
 {
+	struct pcpu *pc;
 
-	panic("ARM64TODO: cpu_est_clockrate");
+	pc = pcpu_find(cpu_id);
+	if (pc == NULL || rate == NULL)
+		return (EINVAL);
+
+	if (pc->pc_clock == 0)
+		return (EOPNOTSUPP);
+
+	*rate = pc->pc_clock;
+	return (0);
 }
 
 void
@@ -598,6 +618,7 @@ init_proc0(vm_offset_t kstack)
 	thread0.td_kstack = kstack;
 	thread0.td_pcb = (struct pcb *)(thread0.td_kstack) - 1;
 	thread0.td_pcb->pcb_fpflags = 0;
+	thread0.td_pcb->pcb_fpusaved = &thread0.td_pcb->pcb_fpustate;
 	thread0.td_pcb->pcb_vfpcpu = UINT_MAX;
 	thread0.td_frame = &proc0_tf;
 	pcpup->pc_curpcb = thread0.td_pcb;
@@ -689,9 +710,6 @@ add_fdt_mem_regions(struct mem_region *mr, int mrcnt, vm_paddr_t *physmap,
 	}
 }
 #endif
-
-#define efi_next_descriptor(ptr, size) \
-	((struct efi_md *)(((uint8_t *) ptr) + size))
 
 static void
 add_efi_map_entries(struct efi_map_header *efihdr, vm_paddr_t *physmap,
@@ -1005,17 +1023,6 @@ initarm(struct arm64_bootparams *abp)
 	early_boot = 0;
 }
 
-uint32_t (*arm_cpu_fill_vdso_timehands)(struct vdso_timehands *,
-    struct timecounter *);
-
-uint32_t
-cpu_fill_vdso_timehands(struct vdso_timehands *vdso_th, struct timecounter *tc)
-{
-
-	return (arm_cpu_fill_vdso_timehands != NULL ?
-	    arm_cpu_fill_vdso_timehands(vdso_th, tc) : 0);
-}
-
 #ifdef DDB
 #include <ddb/ddb.h>
 
@@ -1100,7 +1107,9 @@ DB_SHOW_COMMAND(vtop, db_show_vtop)
 
 	if (have_addr) {
 		phys = arm64_address_translate_s1e1r(addr);
-		db_printf("Physical address reg: 0x%016lx\n", phys);
+		db_printf("Physical address reg (read):  0x%016lx\n", phys);
+		phys = arm64_address_translate_s1e1w(addr);
+		db_printf("Physical address reg (write): 0x%016lx\n", phys);
 	} else
 		db_printf("show vtop <virt_addr>\n");
 }

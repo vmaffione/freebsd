@@ -1,4 +1,4 @@
-/*
+/*-
  * Copyright (c) 1985 Sun Microsystems, Inc.
  * Copyright (c) 1976 Board of Trustees of the University of Illinois.
  * Copyright (c) 1980, 1993
@@ -51,7 +51,9 @@ static char sccsid[] = "@(#)indent.c	5.17 (Berkeley) 6/7/93";
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/capsicum.h>
 #include <err.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -74,6 +76,7 @@ char        bakfile[MAXPATHLEN] = "";
 int
 main(int argc, char **argv)
 {
+    cap_rights_t rights;
 
     int         dec_ind;	/* current indentation for declarations */
     int         di_stack[20];	/* a stack of structure indentation levels */
@@ -119,6 +122,7 @@ main(int argc, char **argv)
     tokenbuf = (char *) malloc(bufsize);
     if (tokenbuf == NULL)
 	err(1, NULL);
+    alloc_typenames();
     l_com = combuf + bufsize - 5;
     l_lab = labbuf + bufsize - 5;
     l_code = codebuf + bufsize - 5;
@@ -233,6 +237,17 @@ main(int argc, char **argv)
 	    bakcopy();
 	}
     }
+
+    /* Restrict input/output descriptors and enter Capsicum sandbox. */
+    cap_rights_init(&rights, CAP_FSTAT, CAP_WRITE);
+    if (cap_rights_limit(fileno(output), &rights) < 0 && errno != ENOSYS)
+	err(EXIT_FAILURE, "unable to limit rights for %s", out_name);
+    cap_rights_init(&rights, CAP_FSTAT, CAP_READ);
+    if (cap_rights_limit(fileno(input), &rights) < 0 && errno != ENOSYS)
+	err(EXIT_FAILURE, "unable to limit rights for %s", in_name);
+    if (cap_enter() < 0 && errno != ENOSYS)
+	err(EXIT_FAILURE, "unable to enter capability mode");
+
     if (ps.com_ind <= 1)
 	ps.com_ind = 2;		/* dont put normal comments before column 2 */
     if (troff) {
@@ -320,8 +335,10 @@ main(int argc, char **argv)
 	    switch (type_code) {
 	    case newline:
 		++line_no;
-		if (sc_end != NULL)
-		    goto sw_buffer;	/* dump comment, if any */
+		if (sc_end != NULL) {	/* dump comment, if any */
+		    *sc_end++ = '\n';	/* newlines are needed in this case */
+		    goto sw_buffer;
+		}
 		flushed_nl = true;
 	    case form_feed:
 		break;		/* form feeds and newlines found here will be
@@ -510,8 +527,11 @@ check_type:
 	case lparen:		/* got a '(' or '[' */
 	    ++ps.p_l_follow;	/* count parens to make Healy happy */
 	    if (ps.want_blank && *token != '[' &&
-		    (ps.last_token != ident || proc_calls_space
-	      || (ps.its_a_keyword && (!ps.sizeof_keyword || Bill_Shannon))))
+		    (ps.last_token != ident || proc_calls_space ||
+		    /* offsetof (1) is never allowed a space; sizeof (2) gets
+		     * one iff -bs; all other keywords (>2) always get a space
+		     * before lparen */
+			(ps.keyword + Bill_Shannon > 2)))
 		*e_code++ = ' ';
 	    ps.want_blank = false;
 	    if (ps.in_decl && !ps.block_init && !ps.dumped_decl_indent &&
@@ -542,19 +562,20 @@ check_type:
 		ps.in_or_st = false;	/* turn off flag for structure decl or
 					 * initialization */
 	    }
-	    if (ps.sizeof_keyword)
-		ps.sizeof_mask |= 1 << ps.p_l_follow;
+	    /* parenthesized type following sizeof or offsetof is not a cast */
+	    if (ps.keyword == 1 || ps.keyword == 2)
+		ps.not_cast_mask |= 1 << ps.p_l_follow;
 	    break;
 
 	case rparen:		/* got a ')' or ']' */
 	    rparen_count--;
-	    if (ps.cast_mask & (1 << ps.p_l_follow) & ~ps.sizeof_mask) {
+	    if (ps.cast_mask & (1 << ps.p_l_follow) & ~ps.not_cast_mask) {
 		ps.last_u_d = true;
 		ps.cast_mask &= (1 << ps.p_l_follow) - 1;
-		ps.want_blank = false;
+		ps.want_blank = space_after_cast;
 	    } else
 		ps.want_blank = true;
-	    ps.sizeof_mask &= (1 << ps.p_l_follow) - 1;
+	    ps.not_cast_mask &= (1 << ps.p_l_follow) - 1;
 	    if (--ps.p_l_follow < 0) {
 		ps.p_l_follow = 0;
 		diag3(0, "Extra %c", *token);
@@ -712,7 +733,7 @@ check_type:
 	    if (ps.last_token == rparen && rparen_count == 0)
 		ps.in_parameter_declaration = 0;
 	    ps.cast_mask = 0;
-	    ps.sizeof_mask = 0;
+	    ps.not_cast_mask = 0;
 	    ps.block_init = 0;
 	    ps.block_init_level = 0;
 	    ps.just_saw_decl--;
@@ -899,8 +920,11 @@ check_type:
 	    }
 	    goto copy_id;	/* move the token into line */
 
-	case decl:		/* we have a declaration type (int, register,
-				 * etc.) */
+	case storage:
+	    prefix_blankline_requested = 0;
+	    goto copy_id;
+
+	case decl:		/* we have a declaration type (int, etc.) */
 	    parse(decl);	/* let parser worry about indentation */
 	    if (ps.last_token == rparen && ps.tos <= 1) {
 		ps.in_parameter_declaration = 1;
@@ -968,7 +992,7 @@ check_type:
     copy_id:
 	    if (ps.want_blank)
 		*e_code++ = ' ';
-	    if (troff && ps.its_a_keyword) {
+	    if (troff && ps.keyword) {
 		e_code = chfont(&bodyf, &keywordf, e_code);
 		for (t_ptr = token; *t_ptr; ++t_ptr) {
 		    CHECK_SIZE_CODE;
@@ -983,6 +1007,16 @@ check_type:
 		    *e_code++ = *t_ptr;
 		}
 	    ps.want_blank = true;
+	    break;
+
+	case strpfx:
+	    if (ps.want_blank)
+		*e_code++ = ' ';
+	    for (t_ptr = token; *t_ptr; ++t_ptr) {
+		CHECK_SIZE_CODE;
+		*e_code++ = *t_ptr;
+	    }
+	    ps.want_blank = false;
 	    break;
 
 	case period:		/* treat a period kind of like a binary
@@ -1156,7 +1190,6 @@ check_type:
 
 	case comment:		/* we have gotten a / followed by * this is a biggie */
 	    if (flushed_nl) {	/* we should force a broken line here */
-		flushed_nl = false;
 		dump_line();
 		ps.want_blank = false;	/* dont insert blank at line start */
 		force_nl = false;

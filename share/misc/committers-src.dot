@@ -15,7 +15,7 @@ digraph src {
 #   foo [label="Foo Bar\nfoo@FreeBSD.org\n????/??/??"]
 #
 # ????/??/?? is the date when the commit bit was obtained, usually the one you
-# can find looking at svn logs for the svnadmin/access file.
+# can find looking at svn logs for the svnadmin/conf/access file.
 # Use YYYY/MM/DD format.
 #
 # For returned commit bits, the node definition will follow this example:
@@ -140,11 +140,14 @@ cognet [label="Olivier Houchard\ncognet@FreeBSD.org\n2002/10/09"]
 cokane [label="Coleman Kane\ncokane@FreeBSD.org\n2000/06/19"]
 cperciva [label="Colin Percival\ncperciva@FreeBSD.org\n2004/01/20"]
 csjp [label="Christian S.J. Peron\ncsjp@FreeBSD.org\n2004/05/04"]
+dab [label="David Bright\ndab@FreeBSD.org\n2016/10/24"]
 das [label="David Schultz\ndas@FreeBSD.org\n2003/02/21"]
 davide [label="Davide Italiano\ndavide@FreeBSD.org\n2012/01/27"]
 dchagin [label="Dmitry Chagin\ndchagin@FreeBSD.org\n2009/02/28"]
+def [label="Konrad Witaszczyk\ndef@FreeBSD.org\n2016/11/02"]
 delphij [label="Xin Li\ndelphij@FreeBSD.org\n2004/09/14"]
 des [label="Dag-Erling Smorgrav\ndes@FreeBSD.org\n1998/04/03"]
+dexuan [label="Dexuan Cui\ndexuan@FreeBSD.org\n2016/10/24"]
 dfr [label="Doug Rabson\ndfr@FreeBSD.org\n????/??/??"]
 dg [label="David Greenman\ndg@FreeBSD.org\n1993/06/14"]
 dim [label="Dimitry Andric\ndim@FreeBSD.org\n2010/08/30"]
@@ -312,6 +315,7 @@ theraven [label="David Chisnall\ntheraven@FreeBSD.org\n2011/11/11"]
 thompsa [label="Andrew Thompson\nthompsa@FreeBSD.org\n2005/05/25"]
 ticso [label="Bernd Walter\nticso@FreeBSD.org\n2002/01/31"]
 tijl [label="Tijl Coosemans\ntijl@FreeBSD.org\n2010/07/16"]
+tsoome [label="Toomas Soome\ntsoome@FreeBSD.org\n2016/08/10"]
 trasz [label="Edward Tomasz Napierala\ntrasz@FreeBSD.org\n2008/08/22"]
 trhodes [label="Tom Rhodes\ntrhodes@FreeBSD.org\n2002/05/28"]
 trociny [label="Mikolaj Golub\ntrociny@FreeBSD.org\n2011/03/10"]
@@ -362,6 +366,8 @@ adrian -> sephe
 adrian -> sgalabov
 
 ae -> melifaro
+
+allanjude -> tsoome
 
 alc -> davide
 
@@ -520,6 +526,7 @@ imp -> sanpei
 imp -> shiba
 imp -> takawata
 imp -> toshi
+imp -> tsoome
 imp -> uch
 
 jake -> bms
@@ -679,6 +686,7 @@ philip -> kp
 phk -> jkoshy
 phk -> mux
 
+pjd -> def
 pjd -> kib
 pjd -> lulf
 pjd -> oshogbo
@@ -749,6 +757,8 @@ scottl -> sbruno
 scottl -> slm
 scottl -> yongari
 
+sephe -> dexuan
+
 sheldonh -> dwmalone
 sheldonh -> iedowse
 
@@ -774,6 +784,7 @@ ume -> suz
 ume -> tshiozak
 
 vangyzen -> badger
+vangyzen -> dab
 
 wes -> scf
 

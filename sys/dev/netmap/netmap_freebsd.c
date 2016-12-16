@@ -27,10 +27,10 @@
 #include "opt_inet.h"
 #include "opt_inet6.h"
 
-#include <sys/types.h>
+#include <sys/param.h>
 #include <sys/module.h>
 #include <sys/errno.h>
-#include <sys/param.h>  /* defines used in kernel.h */
+#include <sys/jail.h>
 #include <sys/poll.h>  /* POLLIN, POLLOUT */
 #include <sys/kernel.h> /* types used in module initialization */
 #include <sys/conf.h>	/* DEV_MODULE_ORDERED */
@@ -1024,7 +1024,7 @@ nm_os_kthread_wakeup_worker(struct nm_kthread *nmk)
 	mtx_lock(&nmk->worker_lock);
 	nmk->scheduled++;
 	if (nmk->worker_ctx.cfg.wchan) {
-		wakeup((void *)nmk->worker_ctx.cfg.wchan);
+		wakeup((void *)(uintptr_t)nmk->worker_ctx.cfg.wchan);
 	}
 	mtx_unlock(&nmk->worker_lock);
 }
@@ -1090,8 +1090,8 @@ nm_kthread_worker(void *data)
 				continue;
 			} else if (nmk->run) {
 				/* wait on event with one second timeout */
-				msleep_spin((void *)ctx->cfg.wchan, &nmk->worker_lock,
-					    "nmk_ev", hz);
+				msleep_spin((void *)(uintptr_t)ctx->cfg.wchan,
+				    &nmk->worker_lock, "nmk_ev", hz);
 				nmk->scheduled++;
 			}
 			mtx_unlock(&nmk->worker_lock);
@@ -1164,7 +1164,7 @@ nm_os_kthread_start(struct nm_kthread *nmk)
 		goto err;
 	}
 
-	D("nm_kthread started td 0x%p", nmk->worker);
+	D("nm_kthread started td %p", nmk->worker);
 
 	return 0;
 err:
@@ -1377,7 +1377,7 @@ freebsd_netmap_ioctl(struct cdev *dev __unused, u_long cmd, caddr_t data,
 	int error;
 	struct netmap_priv_d *priv;
 
-	CURVNET_SET(TD_TO_VNET(rd));
+	CURVNET_SET(TD_TO_VNET(td));
 	error = devfs_get_cdevpriv((void **)&priv);
 	if (error) {
 		/* XXX ENOENT should be impossible, since the priv

@@ -77,8 +77,6 @@ LIBUBOOT_FDT=	${.OBJDIR}/../../uboot/fdt/libuboot_fdt.a
 LIBFDT=		${.OBJDIR}/../../fdt/libfdt.a
 .endif
 
-CFLAGS+=	-DNETIF_OPEN_CLOSE_ONCE
-
 .if ${MK_FORTH} != "no"
 # Enable BootForth
 BOOT_FORTH=	yes
@@ -110,6 +108,8 @@ CFLAGS+=	-I${.OBJDIR}/../../uboot/lib
 
 # where to get libstand from
 CFLAGS+=	-I${.CURDIR}/../../../../lib/libstand/
+
+CFLAGS+=	-fPIC
 
 # clang doesn't understand %D as a specifier to printf
 NO_WERROR.clang=

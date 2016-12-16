@@ -956,6 +956,18 @@ zfsvfs_init(zfsvfs_t *zfsvfs, objset_t *os)
 	else if (error != 0)
 		return (error);
 
+	/*
+	 * Only use the name cache if we are looking for a
+	 * name on a file system that does not require normalization
+	 * or case folding.  We can also look there if we happen to be
+	 * on a non-normalizing, mixed sensitivity file system IF we
+	 * are looking for the exact name (which is always the case on
+	 * FreeBSD).
+	 */
+	zfsvfs->z_use_namecache = !zfsvfs->z_norm ||
+	    ((zfsvfs->z_case == ZFS_CASE_MIXED) &&
+	    !(zfsvfs->z_norm & ~U8_TEXTPREP_TOUPPER));
+
 	return (0);
 }
 
@@ -996,7 +1008,11 @@ zfsvfs_create(const char *osname, zfsvfs_t **zfvp)
 	mutex_init(&zfsvfs->z_lock, NULL, MUTEX_DEFAULT, NULL);
 	list_create(&zfsvfs->z_all_znodes, sizeof (znode_t),
 	    offsetof(znode_t, z_link_node));
+#ifdef DIAGNOSTIC
+	rrm_init(&zfsvfs->z_teardown_lock, B_TRUE);
+#else
 	rrm_init(&zfsvfs->z_teardown_lock, B_FALSE);
+#endif
 	rw_init(&zfsvfs->z_teardown_inactive_lock, NULL, RW_DEFAULT, NULL);
 	rw_init(&zfsvfs->z_fuid_lock, NULL, RW_DEFAULT, NULL);
 	for (int i = 0; i != ZFS_OBJ_MTX_SZ; i++)
@@ -1022,13 +1038,6 @@ zfsvfs_setup(zfsvfs_t *zfsvfs, boolean_t mounting)
 	error = zfs_register_callbacks(zfsvfs->z_vfs);
 	if (error)
 		return (error);
-
-	/*
-	 * Set the objset user_ptr to track its zfsvfs.
-	 */
-	mutex_enter(&zfsvfs->z_os->os_user_ptr_lock);
-	dmu_objset_set_user(zfsvfs->z_os, zfsvfs);
-	mutex_exit(&zfsvfs->z_os->os_user_ptr_lock);
 
 	zfsvfs->z_log = zil_open(zfsvfs->z_os, zfs_get_data);
 
@@ -1089,6 +1098,13 @@ zfsvfs_setup(zfsvfs_t *zfsvfs, boolean_t mounting)
 		}
 		zfsvfs->z_vfs->vfs_flag |= readonly; /* restore readonly bit */
 	}
+
+	/*
+	 * Set the objset user_ptr to track its zfsvfs.
+	 */
+	mutex_enter(&zfsvfs->z_os->os_user_ptr_lock);
+	dmu_objset_set_user(zfsvfs->z_os, zfsvfs);
+	mutex_exit(&zfsvfs->z_os->os_user_ptr_lock);
 
 	return (0);
 }
@@ -1774,7 +1790,7 @@ zfs_statfs(vfs_t *vfsp, struct statfs *statp)
 	strlcpy(statp->f_mntonname, vfsp->mnt_stat.f_mntonname,
 	    sizeof(statp->f_mntonname));
 
-	statp->f_namemax = ZFS_MAXNAMELEN;
+	statp->f_namemax = MAXNAMELEN - 1;
 
 	ZFS_EXIT(zfsvfs);
 	return (0);
@@ -1827,7 +1843,7 @@ zfsvfs_teardown(zfsvfs_t *zfsvfs, boolean_t unmounting)
 		 */
 		(void) dnlc_purge_vfsp(zfsvfs->z_parent->z_vfs, 0);
 #ifdef FREEBSD_NAMECACHE
-		cache_purgevfs(zfsvfs->z_parent->z_vfs);
+		cache_purgevfs(zfsvfs->z_parent->z_vfs, true);
 #endif
 	}
 
@@ -2043,7 +2059,7 @@ zfs_vget(vfs_t *vfsp, ino_t ino, int flags, vnode_t **vpp)
 	ZFS_ENTER(zfsvfs);
 	err = zfs_zget(zfsvfs, ino, &zp);
 	if (err == 0 && zp->z_unlinked) {
-		VN_RELE(ZTOV(zp));
+		vrele(ZTOV(zp));
 		err = EINVAL;
 	}
 	if (err == 0)
@@ -2144,7 +2160,7 @@ zfs_fhtovp(vfs_t *vfsp, fid_t *fidp, int flags, vnode_t **vpp)
 			VERIFY(zfsctl_root_lookup(*vpp, "shares", vpp, NULL,
 			    0, NULL, NULL, NULL, NULL, NULL) == 0);
 		} else {
-			VN_HOLD(*vpp);
+			vref(*vpp);
 		}
 		ZFS_EXIT(zfsvfs);
 		err = vn_lock(*vpp, flags);
@@ -2167,7 +2183,7 @@ zfs_fhtovp(vfs_t *vfsp, fid_t *fidp, int flags, vnode_t **vpp)
 		zp_gen = 1;
 	if (zp->z_unlinked || zp_gen != fid_gen) {
 		dprintf("znode gen (%u) != fid gen (%u)\n", zp_gen, fid_gen);
-		VN_RELE(ZTOV(zp));
+		vrele(ZTOV(zp));
 		ZFS_EXIT(zfsvfs);
 		return (SET_ERROR(EINVAL));
 	}
@@ -2209,7 +2225,7 @@ zfs_suspend_fs(zfsvfs_t *zfsvfs)
  * zfsvfs, held, and long held on entry.
  */
 int
-zfs_resume_fs(zfsvfs_t *zfsvfs, const char *osname)
+zfs_resume_fs(zfsvfs_t *zfsvfs, dsl_dataset_t *ds)
 {
 	int err;
 	znode_t *zp;
@@ -2218,14 +2234,13 @@ zfs_resume_fs(zfsvfs_t *zfsvfs, const char *osname)
 	ASSERT(RW_WRITE_HELD(&zfsvfs->z_teardown_inactive_lock));
 
 	/*
-	 * We already own this, so just hold and rele it to update the
-	 * objset_t, as the one we had before may have been evicted.
+	 * We already own this, so just update the objset_t, as the one we
+	 * had before may have been evicted.
 	 */
 	objset_t *os;
-	VERIFY0(dmu_objset_hold(osname, zfsvfs, &os));
-	VERIFY3P(os->os_dsl_dataset->ds_owner, ==, zfsvfs);
-	VERIFY(dsl_dataset_long_held(os->os_dsl_dataset));
-	dmu_objset_rele(os, zfsvfs);
+	VERIFY3P(ds->ds_owner, ==, zfsvfs);
+	VERIFY(dsl_dataset_long_held(ds));
+	VERIFY0(dmu_objset_from_ds(ds, &os));
 
 	err = zfsvfs_init(zfsvfs, os);
 	if (err != 0)

@@ -10,8 +10,10 @@ SRCS=	hyperv.c \
 	vmbus.c \
 	vmbus_br.c \
 	vmbus_chan.c \
-	vmbus_et.c
-SRCS+=	acpi_if.h bus_if.h device_if.h opt_acpi.h vmbus_if.h
+	vmbus_et.c \
+	vmbus_if.c \
+	vmbus_xact.c
+SRCS+=	acpi_if.h bus_if.h device_if.h opt_acpi.h pci_if.h pcib_if.h vmbus_if.h
 
 # XXX: for assym.s
 SRCS+=  opt_kstack_pages.h opt_nfs.h opt_hwpmc_hooks.h opt_compat.h

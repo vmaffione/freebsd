@@ -463,7 +463,6 @@ static const struct netmap_mem_d nm_blueprint = {
 
 #define DECLARE_SYSCTLS(id, name) \
 	SYSBEGIN(mem2_ ## name); \
-	SYSCTL_DECL(_dev_netmap); /* leave it here, easier for porting */ \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_size, \
 	    CTLFLAG_RW, &netmap_params[id].size, 0, "Requested size of netmap " STRINGIFY(name) "s"); \
 	SYSCTL_INT(_dev_netmap, OID_AUTO, name##_curr_size, \

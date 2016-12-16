@@ -65,6 +65,10 @@ OSRELDATE!=	awk '/^\#define[[:space:]]*__FreeBSD_version/ { print $$3 }' \
 # Keep the related ports builds in the obj directory so that they are only rebuilt once per kernel build
 WRKDIRPREFIX?=	${MAKEOBJDIRPREFIX}${SRC_BASE}/sys/${KERNCONF}
 PORTSMODULESENV=\
+	env \
+	-u CC \
+	-u CXX \
+	-u CPP \
 	PATH=${PATH}:${LOCALBASE}/bin:${LOCALBASE}/sbin \
 	SRC_BASE=${SRC_BASE} \
 	OSVERSION=${OSRELDATE} \
@@ -161,7 +165,7 @@ ${mfile:T:S/.m$/.h/}: ${mfile}
 .endfor
 
 kernel-clean:
-	rm -f *.o *.so *.So *.ko *.s eddep errs \
+	rm -f *.o *.so *.pico *.ko *.s eddep errs \
 	    ${FULLKERNEL} ${KERNEL_KO} ${KERNEL_KO}.debug \
 	    linterrs tags vers.c \
 	    vnode_if.c vnode_if.h vnode_if_newproto.h vnode_if_typedef.h \
@@ -176,9 +180,9 @@ lint: ${LNFILES}
 # dynamic references.  We could probably do a '-Bforcedynamic' mode like
 # in the a.out ld.  For now, this works.
 HACK_EXTRA_FLAGS?= -shared
-hack.So: Makefile
+hack.pico: Makefile
 	:> hack.c
-	${CC} ${HACK_EXTRA_FLAGS} -nostdlib hack.c -o hack.So
+	${CC} ${HACK_EXTRA_FLAGS} -nostdlib hack.c -o hack.pico
 	rm -f hack.c
 
 assym.s: $S/kern/genassym.sh genassym.o
@@ -192,12 +196,13 @@ ${SYSTEM_OBJS} genassym.o vers.o: opt_global.h
 .if !empty(.MAKE.MODE:Unormal:Mmeta) && empty(.MAKE.MODE:Unormal:Mnofilemon)
 _meta_filemon=	1
 .endif
-# Skip reading .depend when not needed to speed up tree-walks
-# and simple lookups.
+# Skip reading .depend when not needed to speed up tree-walks and simple
+# lookups.  For install, only do this if no other targets are specified.
 # Also skip generating or including .depend.* files if in meta+filemon mode
 # since it will track dependencies itself.  OBJS_DEPEND_GUESS is still used.
 .if !empty(.MAKEFLAGS:M-V${_V_READ_DEPEND}) || make(obj) || make(clean*) || \
-    make(install*) || make(kernel-obj) || make(kernel-clean*) || \
+    ${.TARGETS:M*install*} == ${.TARGETS} || \
+    make(kernel-obj) || make(kernel-clean*) || \
     make(kernel-install*) || defined(_meta_filemon)
 _SKIP_READ_DEPEND=	1
 .MAKE.DEPENDFILE=	/dev/null
@@ -352,8 +357,11 @@ config.o env.o hints.o vers.o vnode_if.o:
 config.ln env.ln hints.ln vers.ln vnode_if.ln:
 	${NORMAL_LINT}
 
+.if ${MK_REPRODUCIBLE_BUILD} != "no"
+REPRO_FLAG="-r"
+.endif
 vers.c: $S/conf/newvers.sh $S/sys/param.h ${SYSTEM_DEP}
-	MAKE=${MAKE} sh $S/conf/newvers.sh ${KERN_IDENT}
+	MAKE=${MAKE} sh $S/conf/newvers.sh ${REPRO_FLAG} ${KERN_IDENT}
 
 vnode_if.c: $S/tools/vnode_if.awk $S/kern/vnode_if.src
 	${AWK} -f $S/tools/vnode_if.awk $S/kern/vnode_if.src -c

@@ -40,6 +40,7 @@ SRCS=	\
 	pci_ptnetmap_memdev.c	\
 	pci_ptnetmap_netif.c	\
 	pci_virtio_block.c	\
+	pci_virtio_console.c	\
 	pci_virtio_net.c	\
 	pci_virtio_rnd.c	\
 	pci_uart.c		\

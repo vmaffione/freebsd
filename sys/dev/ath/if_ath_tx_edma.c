@@ -268,7 +268,7 @@ ath_tx_edma_push_staging_list(struct ath_softc *sc, struct ath_txq *txq,
 
 	/* Bump FIFO queue */
 	txq->axq_fifo_depth++;
-	DPRINTF(sc, ATH_DEBUG_XMIT,
+	DPRINTF(sc, ATH_DEBUG_XMIT | ATH_DEBUG_TX_PROC,
 	    "%s: queued %d packets; depth=%d, fifo depth=%d\n",
 	    __func__, sqdepth, txq->fifo.axq_depth, txq->axq_fifo_depth);
 
@@ -296,16 +296,21 @@ ath_edma_tx_fifo_fill(struct ath_softc *sc, struct ath_txq *txq)
 
 	ATH_TXQ_LOCK_ASSERT(txq);
 
-	DPRINTF(sc, ATH_DEBUG_TX_PROC, "%s: Q%d: called\n",
+	DPRINTF(sc, ATH_DEBUG_TX_PROC,
+	    "%s: Q%d: called; fifo.depth=%d, fifo depth=%d, depth=%d, aggr_depth=%d\n",
 	    __func__,
-	    txq->axq_qnum);
+	    txq->axq_qnum,
+	    txq->fifo.axq_depth,
+	    txq->axq_fifo_depth,
+	    txq->axq_depth,
+	    txq->axq_aggr_depth);
 
 	/*
-	 * For now, push up to 4 frames per TX FIFO slot.
+	 * For now, push up to 32 frames per TX FIFO slot.
 	 * If more are in the hardware queue then they'll
 	 * get populated when we try to send another frame
 	 * or complete a frame - so at most there'll be
-	 * 32 non-AMPDU frames per TXQ.
+	 * 32 non-AMPDU frames per node/TID anyway.
 	 *
 	 * Note that the hardware staging queue will limit
 	 * how many frames in total we will have pushed into
@@ -750,11 +755,30 @@ ath_edma_tx_proc(void *arg, int npending)
 {
 	struct ath_softc *sc = (struct ath_softc *) arg;
 
+	ATH_PCU_LOCK(sc);
+	sc->sc_txproc_cnt++;
+	ATH_PCU_UNLOCK(sc);
+
+	ATH_LOCK(sc);
+	ath_power_set_power_state(sc, HAL_PM_AWAKE);
+	ATH_UNLOCK(sc);
+
 #if 0
 	DPRINTF(sc, ATH_DEBUG_TX_PROC, "%s: called, npending=%d\n",
 	    __func__, npending);
 #endif
 	ath_edma_tx_processq(sc, 1);
+
+
+	ATH_PCU_LOCK(sc);
+	sc->sc_txproc_cnt--;
+	ATH_PCU_UNLOCK(sc);
+
+	ATH_LOCK(sc);
+	ath_power_restore_power_state(sc);
+	ATH_UNLOCK(sc);
+
+	ath_tx_kick(sc);
 }
 
 /*
@@ -811,10 +835,11 @@ ath_edma_tx_processq(struct ath_softc *sc, int dosched)
 		}
 
 #if defined(ATH_DEBUG_ALQ) && defined(ATH_DEBUG)
-		if (if_ath_alq_checkdebug(&sc->sc_alq, ATH_ALQ_EDMA_TXSTATUS))
+		if (if_ath_alq_checkdebug(&sc->sc_alq, ATH_ALQ_EDMA_TXSTATUS)) {
 			if_ath_alq_post(&sc->sc_alq, ATH_ALQ_EDMA_TXSTATUS,
 			    sc->sc_tx_statuslen,
 			    (char *) txstatus);
+		}
 #endif /* ATH_DEBUG_ALQ */
 
 		/*

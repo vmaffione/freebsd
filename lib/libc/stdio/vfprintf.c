@@ -364,6 +364,7 @@ __vfprintf(FILE *fp, locale_t locale, const char *fmt0, va_list ap)
 	int nextarg;            /* 1-based argument index */
 	va_list orgap;          /* original argument pointer */
 	char *convbuf;		/* wide to multibyte conversion result */
+	int savserr;
 
 	static const char xdigs_lower[16] = "0123456789abcdef";
 	static const char xdigs_upper[16] = "0123456789ABCDEF";
@@ -459,6 +460,9 @@ __vfprintf(FILE *fp, locale_t locale, const char *fmt0, va_list ap)
 		errno = EBADF;
 		return (EOF);
 	}
+
+	savserr = fp->_flags & __SERR;
+	fp->_flags &= ~__SERR;
 
 	convbuf = NULL;
 	fmt = (char *)fmt0;
@@ -607,6 +611,37 @@ reswitch:	switch (ch) {
 		case 'z':
 			flags |= SIZET;
 			goto rflag;
+		case 'b':
+			{
+			const char *q;
+			int anybitset, bit;
+
+			ulval = (u_int)GETARG(int);
+			cp = GETARG(char *);
+
+			q = __ultoa(ulval, buf + BUF, *cp++, 0, xdigs_lower);
+			PRINT(q, buf + BUF - q);
+
+			if (ulval == 0)
+				break;
+
+			for (anybitset = 0; *cp;) {
+				bit = *cp++;
+				if (ulval & (1 << (bit - 1))) {
+					PRINT(anybitset ? "," : "<", 1);
+					q = cp;
+					for (; (bit = *cp) > ' '; ++cp)
+						continue;
+					PRINT(q, cp - q);
+					anybitset = 1;
+				} else
+					for (; *cp > ' '; ++cp)
+						continue;
+			}
+			if (anybitset)
+				PRINT(">", 1);
+			}
+			continue;
 		case 'C':
 			flags |= LONGINT;
 			/*FALLTHROUGH*/
@@ -1031,6 +1066,8 @@ error:
 		free(convbuf);
 	if (__sferror(fp))
 		ret = EOF;
+	else
+		fp->_flags |= savserr;
 	if ((argtable != NULL) && (argtable != statargtable))
 		free (argtable);
 	return (ret);

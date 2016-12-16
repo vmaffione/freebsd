@@ -94,6 +94,7 @@ archive_acl_clear(struct archive_acl *acl)
 		acl->acl_text = NULL;
 	}
 	acl->acl_p = NULL;
+	acl->acl_types = 0;
 	acl->acl_state = 0; /* Not counting. */
 }
 
@@ -284,8 +285,11 @@ acl_new_entry(struct archive_acl *acl,
 	aq = NULL;
 	while (ap != NULL) {
 		if (ap->type == type && ap->tag == tag && ap->id == id) {
-			ap->permset = permset;
-			return (ap);
+			if (id != -1 || (tag != ARCHIVE_ENTRY_ACL_USER &&
+			    tag != ARCHIVE_ENTRY_ACL_GROUP)) {
+				ap->permset = permset;
+				return (ap);
+			}
 		}
 		aq = ap;
 		ap = ap->next;
@@ -707,10 +711,11 @@ archive_acl_text_l(struct archive_acl *acl, int flags,
 			if (r != 0)
 				return (-1);
 			*p++ = separator;
-			if (flags & ARCHIVE_ENTRY_ACL_STYLE_EXTRA_ID)
+			if (name == NULL || (flags & ARCHIVE_ENTRY_ACL_STYLE_EXTRA_ID)) {
 				id = ap->id;
-			else
+			} else {
 				id = -1;
+			}
 			append_entry(&p, NULL, ap->tag, name,
 			    ap->permset, id);
 			count++;

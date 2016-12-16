@@ -38,6 +38,171 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20161205: libproc version bump
+OLD_LIBS+=usr/lib/libproc.so.3
+OLD_LIBS+=usr/lib32/libproc.so.3
+# 20161127: Remove vm_page_cache(9)
+OLD_FILES+=usr/share/man/man9/vm_page_cache.9.gz
+# 20161124: new clang import which bumps version from 3.8.0 to 3.9.0.
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/allocator_interface.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/asan_interface.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/common_interface_defs.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/coverage_interface.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/dfsan_interface.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/linux_syscall_hooks.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/lsan_interface.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/msan_interface.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/sanitizer/tsan_interface_atomic.h
+OLD_DIRS+=usr/lib/clang/3.8.0/include/sanitizer
+OLD_FILES+=usr/lib/clang/3.8.0/include/__clang_cuda_runtime_wrapper.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/__stddef_max_align_t.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/__wmmintrin_aes.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/__wmmintrin_pclmul.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/adxintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/altivec.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/ammintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/arm_acle.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/arm_neon.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx2intrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx512bwintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx512cdintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx512dqintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx512erintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx512fintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx512vlbwintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx512vldqintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avx512vlintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/avxintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/bmi2intrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/bmiintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/cpuid.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/cuda_builtin_vars.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/emmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/f16cintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/fma4intrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/fmaintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/fxsrintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/htmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/htmxlintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/ia32intrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/immintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/lzcntintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/mm3dnow.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/mm_malloc.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/mmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/module.modulemap
+OLD_FILES+=usr/lib/clang/3.8.0/include/nmmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/pkuintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/pmmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/popcntintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/prfchwintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/rdseedintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/rtmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/s390intrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/shaintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/smmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/tbmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/tmmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/vadefs.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/vecintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/wmmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/x86intrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/xmmintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/xopintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/xsavecintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/xsaveintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/xsaveoptintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/xsavesintrin.h
+OLD_FILES+=usr/lib/clang/3.8.0/include/xtestintrin.h
+OLD_DIRS+=usr/lib/clang/3.8.0/include
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.asan-i386.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.asan-i386.so
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.asan-preinit-i386.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.asan-preinit-x86_64.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.asan-x86_64.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.asan-x86_64.so
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.asan_cxx-i386.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.asan_cxx-x86_64.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.profile-arm.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.profile-i386.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.profile-x86_64.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.safestack-i386.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.safestack-x86_64.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.ubsan_standalone-i386.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.ubsan_standalone-x86_64.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.ubsan_standalone_cxx-i386.a
+OLD_FILES+=usr/lib/clang/3.8.0/lib/freebsd/libclang_rt.ubsan_standalone_cxx-x86_64.a
+OLD_DIRS+=usr/lib/clang/3.8.0/lib/freebsd
+OLD_DIRS+=usr/lib/clang/3.8.0/lib
+OLD_DIRS+=usr/lib/clang/3.8.0
+# 20161121: Hyper-V manuals only apply to amd64 and i386.
+.if ${TARGET_ARCH} != "amd64" && ${TARGET_ARCH} != "i386"
+OLD_FILES+=usr/share/man/man4/hv_kvp.4.gz
+OLD_FILES+=usr/share/man/man4/hv_netvsc.4.gz
+OLD_FILES+=usr/share/man/man4/hv_storvsc.4.gz
+OLD_FILES+=usr/share/man/man4/hv_utils.4.gz
+OLD_FILES+=usr/share/man/man4/hv_vmbus.4.gz
+OLD_FILES+=usr/share/man/man4/hv_vss.4.gz
+.endif
+# 20161118: Remove hv_ata_pci_disengage(4)
+OLD_FILES+=usr/share/man/man4/hv_ata_pci_disengage.4.gz
+# 20161017: urtwn(4) was merged into rtwn(4)
+OLD_FILES+=usr/share/man/man4/urtwn.4.gz
+OLD_FILES+=usr/share/man/man4/urtwnfw.4.gz
+# 20161015: Remove GNU rcs
+OLD_FILES+=usr/bin/ci
+OLD_FILES+=usr/bin/co
+OLD_FILES+=usr/bin/merge
+OLD_FILES+=usr/bin/rcs
+OLD_FILES+=usr/bin/rcsclean
+OLD_FILES+=usr/bin/rcsdiff
+OLD_FILES+=usr/bin/rcsfreeze
+OLD_FILES+=usr/bin/rcsmerge
+OLD_FILES+=usr/bin/rlog
+OLD_FILES+=usr/share/doc/psd/13.rcs/paper.ascii.gz
+OLD_FILES+=usr/share/doc/psd/13.rcs/rcs_func.ascii.gz
+OLD_DIRS+=usr/share/doc/psd/13.rcs
+OLD_FILES+=usr/share/man/man1/ci.1.gz
+OLD_FILES+=usr/share/man/man1/co.1.gz
+OLD_FILES+=usr/share/man/man1/merge.1.gz
+OLD_FILES+=usr/share/man/man1/rcs.1.gz
+OLD_FILES+=usr/share/man/man1/rcsclean.1.gz
+OLD_FILES+=usr/share/man/man1/rcsdiff.1.gz
+OLD_FILES+=usr/share/man/man1/rcsfreeze.1.gz
+OLD_FILES+=usr/share/man/man1/rcsintro.1.gz
+OLD_FILES+=usr/share/man/man1/rcsmerge.1.gz
+OLD_FILES+=usr/share/man/man1/rlog.1.gz
+OLD_FILES+=usr/share/man/man5/rcsfile.5.gz
+# 20161010: remove link to removed m_getclr(9) macro
+OLD_FILES+=usr/share/man/man9/m_getclr.9.gz
+# 20161003: MK_ELFCOPY_AS_OBJCOPY option retired
+OLD_FILES+=usr/bin/elfcopy
+OLD_FILES+=usr/share/man/man1/elfcopy.1.gz
+# 20160906: libkqueue tests moved to /usr/tests/sys/kqueue/libkqueue
+OLD_FILES+=usr/tests/sys/kqueue/kqtest
+OLD_FILES+=usr/tests/sys/kqueue/kqueue_test
+# 20160903: idle page zeroing support removed
+OLD_FILES+=usr/share/man/man9/pmap_zero_idle.9.gz
+# 20160901: Remove digi(4)
+OLD_FILES+=usr/share/man/man4/digi.4.gz
+# 20160819: Remove ie(4)
+OLD_FILES+=usr/share/man/man4/i386/ie.4.gz
+# 20160819: Remove spic(4)
+OLD_FILES+=usr/share/man/man4/spic.4.gz
+# 20160819: Remove wl(4) and wlconfig(8)
+OLD_FILES+=usr/share/man/man4/i386/wl.4.gz
+OLD_FILES+=usr/sbin/wlconfig
+OLD_FILES+=usr/share/man/man8/i386/wlconfig.8.gz
+# 20160819: Remove si(4) and sicontrol(8)
+OLD_FILES+=usr/share/man/man4/si.4.gz
+OLD_FILES+=usr/sbin/sicontrol
+OLD_FILES+=usr/share/man/man8/sicontrol.8.gz
+# 20160819: Remove scd(4)
+OLD_FILES+=usr/share/man/man4/scd.4.gz
+# 20160815: Remove mcd(4)
+OLD_FILES+=usr/share/man/man4/mcd.4.gz
+# 20160805: lockmgr_waiters(9) removed
+OLD_FILES+=usr/share/man/man9/lockmgr_waiters.9.gz
 # 20160703: POSIXify locales with variants
 OLD_FILES+=usr/share/locale/zh_Hant_TW.UTF-8/LC_COLLATE
 OLD_FILES+=usr/share/locale/zh_Hant_TW.UTF-8/LC_CTYPE
@@ -192,18 +357,23 @@ OLD_LIBS+=usr/lib32/pam_unix.so.5
 OLD_FILES+=usr/include/altq/altq_codel.h
 OLD_FILES+=usr/include/altq/altq_fairq.h
 # 20160519: remove DTrace Toolkit from base
+OLD_FILES+=usr/sbin/dtruss
 OLD_FILES+=usr/share/dtrace/toolkit/execsnoop
 OLD_FILES+=usr/share/dtrace/toolkit/hotkernel
 OLD_FILES+=usr/share/dtrace/toolkit/hotuser
 OLD_FILES+=usr/share/dtrace/toolkit/opensnoop
 OLD_FILES+=usr/share/dtrace/toolkit/procsystime
 OLD_DIRS+=usr/share/dtrace/toolkit
+OLD_FILES+=usr/share/man/man1/dtruss.1.gz
 # 20160519: stale MLINK removed
 OLD_FILES+=usr/share/man/man9/rman_await_resource.9.gz
 # 20160517: ReiserFS removed
 OLD_FILES+=usr/share/man/man5/reiserfs.5.gz
+# 20160504: tests rework
+OLD_FILES+=usr/tests/lib/libc/regex/data/README
 # 20160430: kvm_getfiles(3) removed from kvm(3)
 OLD_LIBS+=lib/libkvm.so.6
+OLD_LIBS+=usr/lib32/libkvm.so.6
 OLD_FILES+=usr/share/man/man3/kvm_getfiles.3.gz
 # 20160423: remove mroute6d
 OLD_FILES+=etc/rc.d/mroute6d
@@ -351,12 +521,18 @@ OLD_LIBS+=usr/lib32/libcapsicum.so.0
 OLD_FILES+=usr/lib32/libcapsicum_p.a
 # 20160223: functionality from mkulzma(1) merged into mkuzip(1)
 OLD_FILES+=usr/bin/mkulzma
+OLD_FILES+=usr/share/man/man4/geom_uncompress.4.gz
+OLD_FILES+=usr/share/man/man8/mkulzma.8.gz
 # 20160211: Remove obsolete unbound-control-setup
 OLD_FILES+=usr/sbin/unbound-control-setup
+# 20160121: cc.h moved
+OLD_FILES+=usr/include/netinet/cc.h
 # 20160116: Update mandoc to cvs snapshot 20160116
 OLD_FILES+=usr/share/mdocml/example.style.css
 OLD_FILES+=usr/share/mdocml/style.css
 OLD_DIRS+=usr/share/mdocml
+# 20160114: SA-16:06.snmpd
+OLD_FILES+=usr/share/examples/etc/snmpd.config
 # 20151225: new clang import which bumps version from 3.7.0 to 3.7.1.
 OLD_FILES+=usr/lib/clang/3.7.0/include/sanitizer/allocator_interface.h
 OLD_FILES+=usr/lib/clang/3.7.0/include/sanitizer/asan_interface.h
@@ -575,6 +751,8 @@ OLD_LIBS+=lib/libcrypto.so.7
 OLD_LIBS+=usr/lib/libssl.so.7
 OLD_LIBS+=usr/lib32/libcrypto.so.7
 OLD_LIBS+=usr/lib32/libssl.so.7
+# 20151029: LinuxKPI moved to sys/compat/linuxkpi
+OLD_FILES+=usr/include/dev/usb/usb_compat_linux.h
 # 20151015: test symbols moved to /usr/lib/debug
 OLD_DIRS+=usr/tests/lib/atf/libatf-c++/.debug
 OLD_FILES+=usr/tests/lib/atf/libatf-c++/.debug/atf_c++_test.debug

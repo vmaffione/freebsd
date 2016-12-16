@@ -979,10 +979,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			    au_fcntl_cmd_to_bsm(ar->ar_arg_cmd));
 			kau_write(rec, tok);
 		}
-		if (ar->ar_arg_cmd == F_GETLK || ar->ar_arg_cmd == F_SETLK ||
-		    ar->ar_arg_cmd == F_SETLKW) {
-			FD_VNODE1_TOKENS;
-		}
+		FD_VNODE1_TOKENS;
 		break;
 
 	case AUE_FCHFLAGS:
@@ -1394,8 +1391,8 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 
 	case AUE_SETLOGIN:
-		if (ARG_IS_VALID(kar, ARG_TEXT)) {
-			tok = au_to_text(ar->ar_arg_text);
+		if (ARG_IS_VALID(kar, ARG_LOGIN)) {
+			tok = au_to_text(ar->ar_arg_login);
 			kau_write(rec, tok);
 		}
 		break;
