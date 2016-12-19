@@ -549,14 +549,14 @@ vm_map_mmio(struct vm *vm, vm_paddr_t gpa, size_t len, vm_paddr_t hpa)
 
 /* Handler function for VM_MAP_USER_BUF ioctl. */
 int
-vm_map_usermem(struct vm *vm, vm_paddr_t gpa, size_t len, void *buf, struct thread *td)
+vm_map_usermem(struct vm *vm, vm_paddr_t gpa, size_t len, void *buf,
+		int map, struct thread *td)
 {
-	vm_object_t obj;
+	if (!map) /* this is an unmapping request */
+		return vmm_usermem_free(vm->vmspace, gpa, len);
 
-	if ((obj = vmm_usermem_alloc(vm->vmspace, gpa, len, buf, td)) == NULL)
-		return (ENOMEM);
-
-	return (0);
+	/* this is a mapping request */
+	return vmm_usermem_alloc(vm->vmspace, gpa, len, buf, td);
 }
 
 int

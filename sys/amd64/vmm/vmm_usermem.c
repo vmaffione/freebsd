@@ -120,54 +120,56 @@ usermem_mapped(struct vmspace *vmspace, vm_paddr_t gpa)
 	return (FALSE);
 }
 
-vm_object_t
+int
 vmm_usermem_alloc(struct vmspace *vmspace, vm_paddr_t gpa, size_t len,
 	       void *buf, struct thread *td)
 {
-	int error;
-	vm_object_t obj;
+	vm_object_t obj = NULL;
 	vm_map_t map;
 	vm_map_entry_t entry;
 	vm_pindex_t index;
 	vm_prot_t prot;
 	boolean_t wired;
+	int error;
 
 	map = &td->td_proc->p_vmspace->vm_map;
+
 	/* lookup the vm_object that describe user addr */
 	error = vm_map_lookup(&map, (unsigned long)buf, VM_PROT_RW, &entry,
-		&obj, &index, &prot, &wired);
+				&obj, &index, &prot, &wired);
+	if (error != KERN_SUCCESS)
+		return EINVAL;
 
 	/* map th vm_object in the vmspace */
-	if (obj != NULL) {
-		error = vm_map_find(&vmspace->vm_map, obj, index, &gpa, len, 0,
-				    VMFS_NO_SPACE, VM_PROT_RW, VM_PROT_RW, 0);
-		if (error != KERN_SUCCESS) {
-			vm_object_deallocate(obj);
-			obj = NULL;
-		}
+	error = vm_map_find(&vmspace->vm_map, obj, index, &gpa, len, 0,
+			    VMFS_NO_SPACE, VM_PROT_RW, VM_PROT_RW, 0);
+	if (error != KERN_SUCCESS) {
+		vm_object_deallocate(obj);
+		obj = NULL;
 	}
 	vm_map_lookup_done(map, entry);
 
-	/* acquire the reference to the vm_object */
-	if (obj != NULL) {
-		vm_object_reference(obj);
-		vmm_usermem_add(vmspace, gpa, len);
-	}
+	if (error)
+		return EINVAL;
 
-	return (obj);
+	/* acquire the reference to the vm_object */
+	vm_object_reference(obj);
+	vmm_usermem_add(vmspace, gpa, len);
+
+	return 0;
 }
 
-void
+int
 vmm_usermem_free(struct vmspace *vmspace, vm_paddr_t gpa, size_t len)
 {
-	int ret;
+	int found;
 
-	ret  = vmm_usermem_del(vmspace, gpa, len);
-	if (ret) {
-		//TODO check return value of vm_map_remove ?
-		vm_map_remove(&vmspace->vm_map, gpa, gpa + len);
-		//TODO should we call vm_object_deallocate ?
-	}
+	found = vmm_usermem_del(vmspace, gpa, len);
+	if (!found)
+		return EINVAL;
+
+	//TODO should we call vm_object_deallocate ?
+	return vm_map_remove(&vmspace->vm_map, gpa, gpa + len);
 }
 
 void

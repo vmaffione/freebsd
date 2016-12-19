@@ -152,13 +152,6 @@ vmm_ioport_reg_wakeup(struct vm *vm, struct ioport_reg_handler *regh, uint32_t *
 	return (0);
 }
 
-/*
- * TODO:
- * - VM_IO_REGH_CONDSIGNAL:	pthread_cond_signal
- * - VM_IO_REGH_WRITEFD:	write on fd
- * - VM_IO_REGH_IOCTL:		ioctl on fd
- */
-
 /* call with ioregh->lock held */
 static struct ioport_reg_handler *
 vmm_ioport_find_handler(struct ioregh *ioregh, uint16_t port, uint16_t in,

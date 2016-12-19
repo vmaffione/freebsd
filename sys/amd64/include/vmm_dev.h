@@ -128,6 +128,7 @@ struct vm_user_buf {
 	vm_paddr_t	gpa;
 	void 		*addr;
 	size_t		len;
+	int		map; /* boolean */
 };
 
 /* Argument for VM_IO_REG_HANDLER ioctl in vmmapi.c */

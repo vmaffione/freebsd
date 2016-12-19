@@ -235,7 +235,7 @@ ptn_memdev_configure_bars(struct ptn_memdev_softc *sc)
 	/* Map netmap memory on the memory BAR. */
 	ret = vm_map_user_buf(sc->pi->pi_vmctx,
 			      sc->pi->pi_bar[PTNETMAP_MEM_PCI_BAR].addr,
-			      sc->info.memsize, sc->mem_ptr);
+			      sc->info.memsize, sc->mem_ptr, 1);
 	if (ret) {
 		printf("ptnetmap_memdev: membar map error %d\n", ret);
 		return ret;

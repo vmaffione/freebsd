@@ -440,7 +440,7 @@ vmmdev_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 	case VM_MAP_USER_BUF:
 		usermem = (struct vm_user_buf *)data;
 		error = vm_map_usermem(sc->vm, usermem->gpa, usermem->len,
-					usermem->addr, td);
+					usermem->addr, usermem->map, td);
 		break;
 	case VM_IO_REG_HANDLER:
 		ioregh = (struct vm_io_reg_handler *)data;

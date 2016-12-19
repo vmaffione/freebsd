@@ -902,7 +902,8 @@ vm_get_fd(struct vmctx *ctx)
  * To be used for devices that expose internal memory.
  */
 int
-vm_map_user_buf(struct vmctx *ctx, vm_paddr_t gpa, size_t len, void *host_buf)
+vm_map_user_buf(struct vmctx *ctx, vm_paddr_t gpa, size_t len,
+		void *host_buf, int map)
 {
 	struct vm_user_buf user_buf;
 
@@ -910,6 +911,7 @@ vm_map_user_buf(struct vmctx *ctx, vm_paddr_t gpa, size_t len, void *host_buf)
 	user_buf.gpa = gpa;
 	user_buf.len = len;
 	user_buf.addr = host_buf;
+	user_buf.map = map;
 
 	return (ioctl(ctx->fd, VM_MAP_USER_BUF, &user_buf));
 }

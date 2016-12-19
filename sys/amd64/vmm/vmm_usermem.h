@@ -31,9 +31,9 @@
 
 struct vm;
 
-struct vm_object *vmm_usermem_alloc(struct vmspace *, vm_paddr_t gpa,
+int		vmm_usermem_alloc(struct vmspace *, vm_paddr_t gpa,
 				 size_t len, void *buf, struct thread *td);
-void		vmm_usermem_free(struct vmspace *, vm_paddr_t gpa, size_t len);
+int		vmm_usermem_free(struct vmspace *, vm_paddr_t gpa, size_t len);
 void		vmm_usermem_cleanup(struct vmspace *);
 boolean_t	usermem_mapped(struct vmspace *, vm_paddr_t gpa);
 
