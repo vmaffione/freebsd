@@ -55,6 +55,9 @@
 #if defined(CONFIG_NETMAP_PTNETMAP_HOST)
 #define WITH_PTNETMAP_HOST
 #endif
+#if defined(CONFIG_NETMAP_SINK)
+#define WITH_SINK
+#endif
 
 #elif defined (_WIN32)
 #define WITH_VALE	// comment out to disable VALE support
@@ -287,6 +290,11 @@ void nm_os_put_module(void);
 void netmap_make_zombie(struct ifnet *);
 void netmap_undo_zombie(struct ifnet *);
 
+/* os independent alloc/realloc/free */
+void *nm_os_malloc(size_t);
+void *nm_os_realloc(void *, size_t new_size, size_t old_size);
+void nm_os_free(void *);
+
 /* passes a packet up to the host stack.
  * If the packet is sent (or dropped) immediately it returns NULL,
  * otherwise it links the packet to prev and returns m.
@@ -317,6 +325,12 @@ nm_txrx_swap(enum txrx t)
 
 #define for_rx_tx(t)	for ((t) = 0; (t) < NR_TXRX; (t)++)
 
+#ifdef WITH_MONITOR
+struct netmap_zmon_list {
+	struct netmap_kring *next;
+	struct netmap_kring *prev;
+};
+#endif /* WITH_MONITOR */
 
 /*
  * private, kernel view of a ring. Keeps track of the status of
@@ -491,6 +505,12 @@ struct netmap_kring {
 	struct netmap_kring **monitors;
 	uint32_t max_monitors; /* current size of the monitors array */
 	uint32_t n_monitors;	/* next unused entry in the monitor array */
+	uint32_t mon_pos[NR_TXRX]; /* index of this ring in the monitored ring array */
+	uint32_t mon_tail;  /* last seen slot on rx */
+
+	/* circular list of zero-copy monitors */
+	struct netmap_zmon_list zmon_list[NR_TXRX];
+
 	/*
 	 * Monitors work by intercepting the sync and notify callbacks of the
 	 * monitored krings. This is implemented by replacing the pointers
@@ -499,8 +519,6 @@ struct netmap_kring {
 	int (*mon_sync)(struct netmap_kring *kring, int flags);
 	int (*mon_notify)(struct netmap_kring *kring, int flags);
 
-	uint32_t mon_tail;  /* last seen slot on rx */
-	uint32_t mon_pos;   /* index of this ring in the monitored ring array */
 #endif
 }
 #ifdef _WIN32

@@ -89,10 +89,28 @@ nm_os_selinfo_uninit(NM_SELINFO_T *si)
 	mtx_destroy(&si->m);
 }
 
+void *
+nm_os_malloc(size_t size)
+{
+	return malloc(size, M_DEVBUF, M_NOWAIT | M_ZERO);
+}
+
+void *
+nm_os_realloc(void *addr, size_t new_size, size_t old_size __unused)
+{
+	return realloc(addr, new_size, M_DEVBUF, M_NOWAIT | M_ZERO);	
+}
+
+void
+nm_os_free(void *addr)
+{
+	free(addr, M_DEVBUF);
+}
+
 void
 nm_os_ifnet_lock(void)
 {
-	IFNET_WLOCK();
+	IFNET_RLOCK();
 }
 
 void
@@ -1021,12 +1039,12 @@ nm_os_kthread_wakeup_worker(struct nm_kthread *nmk)
 	 * but simply that it has changed since the last
 	 * time the kthread saw it.
 	 */
-	mtx_lock(&nmk->worker_lock);
+	mtx_lock_spin(&nmk->worker_lock);
 	nmk->scheduled++;
 	if (nmk->worker_ctx.cfg.wchan) {
-		wakeup((void *)(uintptr_t)nmk->worker_ctx.cfg.wchan);
+		wakeup((void *)nmk->worker_ctx.cfg.wchan);
 	}
-	mtx_unlock(&nmk->worker_lock);
+	mtx_unlock_spin(&nmk->worker_lock);
 }
 
 void inline
@@ -1080,21 +1098,21 @@ nm_kthread_worker(void *data)
 			ctx->worker_fn(ctx->worker_private); /* worker body */
 		} else {
 			/* checks if there is a pending notification */
-			mtx_lock(&nmk->worker_lock);
+			mtx_lock_spin(&nmk->worker_lock);
 			if (likely(nmk->scheduled != old_scheduled)) {
 				old_scheduled = nmk->scheduled;
-				mtx_unlock(&nmk->worker_lock);
+				mtx_unlock_spin(&nmk->worker_lock);
 
 				ctx->worker_fn(ctx->worker_private); /* worker body */
 
 				continue;
 			} else if (nmk->run) {
 				/* wait on event with one second timeout */
-				msleep_spin((void *)(uintptr_t)ctx->cfg.wchan,
-				    &nmk->worker_lock, "nmk_ev", hz);
+				msleep_spin((void *)ctx->cfg.wchan, &nmk->worker_lock,
+					    "nmk_ev", hz);
 				nmk->scheduled++;
 			}
-			mtx_unlock(&nmk->worker_lock);
+			mtx_unlock_spin(&nmk->worker_lock);
 		}
 	}
 
