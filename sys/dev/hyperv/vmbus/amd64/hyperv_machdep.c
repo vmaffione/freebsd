@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/timetc.h>
+#include <sys/vdso.h>
 
 #include <machine/cpufunc.h>
 #include <machine/cputypes.h>
@@ -52,18 +53,20 @@ struct hyperv_reftsc_ctx {
 	struct hyperv_dma	tsc_ref_dma;
 };
 
+static uint32_t			hyperv_tsc_vdso_timehands(
+				    struct vdso_timehands *,
+				    struct timecounter *);
+
 static d_open_t			hyperv_tsc_open;
 static d_mmap_t			hyperv_tsc_mmap;
 
 static struct timecounter	hyperv_tsc_timecounter = {
 	.tc_get_timecount	= NULL,	/* based on CPU vendor. */
-	.tc_poll_pps		= NULL,
 	.tc_counter_mask	= 0xffffffff,
 	.tc_frequency		= HYPERV_TIMER_FREQ,
 	.tc_name		= "Hyper-V-TSC",
 	.tc_quality		= 3000,
-	.tc_flags		= 0,
-	.tc_priv		= NULL
+	.tc_fill_vdso_timehands = hyperv_tsc_vdso_timehands,
 };
 
 static struct cdevsw		hyperv_tsc_cdevsw = {
@@ -117,9 +120,21 @@ hyperv_tsc_mmap(struct cdev *dev __unused, vm_ooffset_t offset,
 	return (0);
 }
 
+static uint32_t
+hyperv_tsc_vdso_timehands(struct vdso_timehands *vdso_th,
+    struct timecounter *tc __unused)
+{
+
+	vdso_th->th_algo = VDSO_TH_ALGO_X86_HVTSC;
+	vdso_th->th_x86_shift = 0;
+	vdso_th->th_x86_hpet_idx = 0;
+	bzero(vdso_th->th_res, sizeof(vdso_th->th_res));
+	return (1);
+}
+
 #define HYPERV_TSC_TIMECOUNT(fence)					\
-static u_int								\
-hyperv_tsc_timecount_##fence(struct timecounter *tc)			\
+static uint64_t								\
+hyperv_tc64_tsc_##fence(void)						\
 {									\
 	struct hyperv_reftsc *tsc_ref = hyperv_ref_tsc.tsc_ref;		\
 	uint32_t seq;							\
@@ -147,6 +162,13 @@ hyperv_tsc_timecount_##fence(struct timecounter *tc)			\
 	/* Fallback to the generic timecounter, i.e. rdmsr. */		\
 	return (rdmsr(MSR_HV_TIME_REF_COUNT));				\
 }									\
+									\
+static u_int								\
+hyperv_tsc_timecount_##fence(struct timecounter *tc __unused)		\
+{									\
+									\
+	return (hyperv_tc64_tsc_##fence());				\
+}									\
 struct __hack
 
 HYPERV_TSC_TIMECOUNT(lfence);
@@ -155,6 +177,7 @@ HYPERV_TSC_TIMECOUNT(mfence);
 static void
 hyperv_tsc_tcinit(void *dummy __unused)
 {
+	hyperv_tc64_t tc64 = NULL;
 	uint64_t val, orig;
 
 	if ((hyperv_features &
@@ -167,11 +190,13 @@ hyperv_tsc_tcinit(void *dummy __unused)
 	case CPU_VENDOR_AMD:
 		hyperv_tsc_timecounter.tc_get_timecount =
 		    hyperv_tsc_timecount_mfence;
+		tc64 = hyperv_tc64_tsc_mfence;
 		break;
 
 	case CPU_VENDOR_INTEL:
 		hyperv_tsc_timecounter.tc_get_timecount =
 		    hyperv_tsc_timecount_lfence;
+		tc64 = hyperv_tc64_tsc_lfence;
 		break;
 
 	default:
@@ -195,6 +220,10 @@ hyperv_tsc_tcinit(void *dummy __unused)
 
 	/* Register "enlightened" timecounter. */
 	tc_init(&hyperv_tsc_timecounter);
+
+	/* Install 64 bits timecounter method for other modules to use. */
+	KASSERT(tc64 != NULL, ("tc64 is not set"));
+	hyperv_tc64 = tc64;
 
 	/* Add device for mmap(2). */
 	make_dev(&hyperv_tsc_cdevsw, 0, UID_ROOT, GID_WHEEL, 0444,

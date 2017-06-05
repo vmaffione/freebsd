@@ -304,13 +304,45 @@ vm_fault_restore_map_lock(struct faultstate *fs)
 	fs->lookup_still_valid = true;
 }
 
+static void
+vm_fault_populate_check_page(vm_page_t m)
+{
+
+	/*
+	 * Check each page to ensure that the pager is obeying the
+	 * interface: the page must be installed in the object, fully
+	 * valid, and exclusively busied.
+	 */
+	MPASS(m != NULL);
+	MPASS(m->valid == VM_PAGE_BITS_ALL);
+	MPASS(vm_page_xbusied(m));
+}
+
+static void
+vm_fault_populate_cleanup(vm_object_t object, vm_pindex_t first,
+    vm_pindex_t last)
+{
+	vm_page_t m;
+	vm_pindex_t pidx;
+
+	VM_OBJECT_ASSERT_WLOCKED(object);
+	MPASS(first <= last);
+	for (pidx = first, m = vm_page_lookup(object, pidx);
+	    pidx <= last; pidx++, m = vm_page_next(m)) {
+		vm_fault_populate_check_page(m);
+		vm_page_lock(m);
+		vm_page_deactivate(m);
+		vm_page_unlock(m);
+		vm_page_xunbusy(m);
+	}
+}
 
 static int
 vm_fault_populate(struct faultstate *fs, vm_offset_t vaddr, vm_prot_t prot,
     int fault_type, int fault_flags, boolean_t wired, vm_page_t *m_hold)
 {
 	vm_page_t m;
-	vm_pindex_t f_first, f_last, pidx;
+	vm_pindex_t map_first, map_last, pager_first, pager_last, pidx;
 	int rv;
 
 	MPASS(fs->object == fs->first_object);
@@ -319,9 +351,8 @@ vm_fault_populate(struct faultstate *fs, vm_offset_t vaddr, vm_prot_t prot,
 	MPASS(fs->first_object->backing_object == NULL);
 	MPASS(fs->lookup_still_valid);
 
-	f_first = OFF_TO_IDX(fs->entry->offset);
-	f_last = OFF_TO_IDX(fs->entry->offset + fs->entry->end -
-	    fs->entry->start) - 1;
+	pager_first = OFF_TO_IDX(fs->entry->offset);
+	pager_last = pager_first + atop(fs->entry->end - fs->entry->start) - 1;
 	unlock_map(fs);
 	unlock_vp(fs);
 
@@ -334,7 +365,7 @@ vm_fault_populate(struct faultstate *fs, vm_offset_t vaddr, vm_prot_t prot,
 	 * to the driver.
 	 */
 	rv = vm_pager_populate(fs->first_object, fs->first_pindex,
-	    fault_type, fs->entry->max_protection, &f_first, &f_last);
+	    fault_type, fs->entry->max_protection, &pager_first, &pager_last);
 
 	VM_OBJECT_ASSERT_WLOCKED(fs->first_object);
 	if (rv == VM_PAGER_BAD) {
@@ -351,34 +382,42 @@ vm_fault_populate(struct faultstate *fs, vm_offset_t vaddr, vm_prot_t prot,
 		return (KERN_FAILURE); /* AKA SIGSEGV */
 
 	/* Ensure that the driver is obeying the interface. */
-	MPASS(f_first <= f_last);
-	MPASS(fs->first_pindex <= f_last);
-	MPASS(fs->first_pindex >= f_first);
-	MPASS(f_last < fs->first_object->size);
+	MPASS(pager_first <= pager_last);
+	MPASS(fs->first_pindex <= pager_last);
+	MPASS(fs->first_pindex >= pager_first);
+	MPASS(pager_last < fs->first_object->size);
 
 	vm_fault_restore_map_lock(fs);
-	if (fs->map->timestamp != fs->map_generation)
+	if (fs->map->timestamp != fs->map_generation) {
+		vm_fault_populate_cleanup(fs->first_object, pager_first,
+		    pager_last);
 		return (KERN_RESOURCE_SHORTAGE); /* RetryFault */
+	}
 
-	/* Clip pager response to fit into the vm_map_entry. */
-	f_first = MAX(OFF_TO_IDX(fs->entry->offset), f_first);
-	f_last = MIN(OFF_TO_IDX(fs->entry->end - fs->entry->start +
-	    fs->entry->offset), f_last);
-
-	pidx = f_first;
-	for (m = vm_page_lookup(fs->first_object, pidx); pidx <= f_last;
-	    pidx++, m = vm_page_next(m)) {
-		/*
-		 * Check each page to ensure that the driver is
-		 * obeying the interface: the page must be installed
-		 * in the object, fully valid, and exclusively busied.
-		 */
-		MPASS(m != NULL);
-		MPASS(vm_page_xbusied(m));
-		MPASS(m->valid == VM_PAGE_BITS_ALL);
-		MPASS(m->object == fs->first_object);
-		MPASS(m->pindex == pidx);
-
+	/*
+	 * The map is unchanged after our last unlock.  Process the fault.
+	 *
+	 * The range [pager_first, pager_last] that is given to the
+	 * pager is only a hint.  The pager may populate any range
+	 * within the object that includes the requested page index.
+	 * In case the pager expanded the range, clip it to fit into
+	 * the map entry.
+	 */
+	map_first = OFF_TO_IDX(fs->entry->offset);
+	if (map_first > pager_first) {
+		vm_fault_populate_cleanup(fs->first_object, pager_first,
+		    map_first - 1);
+		pager_first = map_first;
+	}
+	map_last = map_first + atop(fs->entry->end - fs->entry->start) - 1;
+	if (map_last < pager_last) {
+		vm_fault_populate_cleanup(fs->first_object, map_last + 1,
+		    pager_last);
+		pager_last = map_last;
+	}
+	for (pidx = pager_first, m = vm_page_lookup(fs->first_object, pidx);
+	    pidx <= pager_last; pidx++, m = vm_page_next(m)) {
+		vm_fault_populate_check_page(m);
 		vm_fault_dirty(fs->entry, m, prot, fault_type, fault_flags,
 		    true);
 		VM_OBJECT_WUNLOCK(fs->first_object);
@@ -458,7 +497,7 @@ vm_fault_hold(vm_map_t map, vm_offset_t vaddr, vm_prot_t fault_type,
 	boolean_t wired;	/* Passed by reference. */
 	bool dead, growstack, hardfault, is_first_object_locked;
 
-	PCPU_INC(cnt.v_vm_faults);
+	VM_CNT_INC(v_vm_faults);
 	fs.vp = NULL;
 	faultcount = 0;
 	nera = -1;
@@ -490,8 +529,8 @@ RetryFault:;
 	fs.map_generation = fs.map->timestamp;
 
 	if (fs.entry->eflags & MAP_ENTRY_NOFAULT) {
-		panic("vm_fault: fault on nofault entry, addr: %lx",
-		    (u_long)vaddr);
+		panic("%s: fault on nofault entry, addr: %#lx",
+		    __func__, (u_long)vaddr);
 	}
 
 	if (fs.entry->eflags & MAP_ENTRY_IN_TRANSITION &&
@@ -634,7 +673,7 @@ RetryFault:;
 				}
 				vm_object_pip_wakeup(fs.object);
 				VM_OBJECT_WUNLOCK(fs.object);
-				PCPU_INC(cnt.v_intrans);
+				VM_CNT_INC(v_intrans);
 				vm_object_deallocate(fs.first_object);
 				goto RetryFault;
 			}
@@ -960,9 +999,9 @@ readrest:
 			if ((fs.m->flags & PG_ZERO) == 0) {
 				pmap_zero_page(fs.m);
 			} else {
-				PCPU_INC(cnt.v_ozfod);
+				VM_CNT_INC(v_ozfod);
 			}
-			PCPU_INC(cnt.v_zfod);
+			VM_CNT_INC(v_zfod);
 			fs.m->valid = VM_PAGE_BITS_ALL;
 			/* Don't try to prefault neighboring pages. */
 			faultcount = 1;
@@ -1056,7 +1095,7 @@ readrest:
 				vm_page_xbusy(fs.m);
 				fs.first_m = fs.m;
 				fs.m = NULL;
-				PCPU_INC(cnt.v_cow_optim);
+				VM_CNT_INC(v_cow_optim);
 			} else {
 				/*
 				 * Oh, well, lets copy it.
@@ -1092,7 +1131,7 @@ readrest:
 			fs.m = fs.first_m;
 			if (!is_first_object_locked)
 				VM_OBJECT_WLOCK(fs.object);
-			PCPU_INC(cnt.v_cow_faults);
+			VM_CNT_INC(v_cow_faults);
 			curthread->td_cow++;
 		} else {
 			prot &= ~VM_PROT_WRITE;
@@ -1207,7 +1246,7 @@ readrest:
 	 */
 	unlock_and_deallocate(&fs);
 	if (hardfault) {
-		PCPU_INC(cnt.v_io_faults);
+		VM_CNT_INC(v_io_faults);
 		curthread->td_ru.ru_majflt++;
 #ifdef RACCT
 		if (racct_enable && fs.object->type == OBJT_VNODE) {
@@ -1330,11 +1369,12 @@ vm_fault_prefault(const struct faultstate *fs, vm_offset_t addra,
 
 	entry = fs->entry;
 
-	starta = addra - backward * PAGE_SIZE;
-	if (starta < entry->start) {
+	if (addra < backward * PAGE_SIZE) {
 		starta = entry->start;
-	} else if (starta > addra) {
-		starta = 0;
+	} else {
+		starta = addra - backward * PAGE_SIZE;
+		if (starta < entry->start)
+			starta = entry->start;
 	}
 
 	/*
@@ -1505,7 +1545,7 @@ vm_fault_copy_entry(vm_map_t dst_map, vm_map_t src_map,
 		 * actually shadow anything - we copy the pages directly.)
 		 */
 		dst_object = vm_object_allocate(OBJT_DEFAULT,
-		    OFF_TO_IDX(dst_entry->end - dst_entry->start));
+		    atop(dst_entry->end - dst_entry->start));
 #if VM_NRESERVLEVEL > 0
 		dst_object->flags |= OBJ_COLORED;
 		dst_object->pg_color = atop(dst_entry->start);

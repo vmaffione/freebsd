@@ -143,8 +143,8 @@ sctp_threshold_management(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	}
 	SCTPDBG(SCTP_DEBUG_TIMER4, "Overall error count for %p now %d thresh:%u state:%x\n",
 	    (void *)&stcb->asoc, stcb->asoc.overall_error_count,
-	    (uint32_t) threshold,
-	    ((net == NULL) ? (uint32_t) 0 : (uint32_t) net->dest_state));
+	    (uint32_t)threshold,
+	    ((net == NULL) ? (uint32_t)0 : (uint32_t)net->dest_state));
 	/*
 	 * We specifically do not do >= to give the assoc one more change
 	 * before we fail it.
@@ -193,8 +193,10 @@ sctp_find_alternate_net(struct sctp_tcb *stcb,
 	 */
 	if (mode == 2) {
 		TAILQ_FOREACH(mnet, &stcb->asoc.nets, sctp_next) {
-			/* JRS 5/14/07 - If the destination is unreachable
-			 * or unconfirmed, skip it. */
+			/*
+			 * JRS 5/14/07 - If the destination is unreachable
+			 * or unconfirmed, skip it.
+			 */
 			if (((mnet->dest_state & SCTP_ADDR_REACHABLE) != SCTP_ADDR_REACHABLE) ||
 			    (mnet->dest_state & SCTP_ADDR_UNCONFIRMED)) {
 				continue;
@@ -285,7 +287,7 @@ sctp_find_alternate_net(struct sctp_tcb *stcb,
 			return (max_cwnd_net);
 		}
 	}			/* JRS 5/14/07 - If mode is set to 1, use the
-	  * CMT policy for choosing an alternate net. */ 
+				 * CMT policy for choosing an alternate net. */
 	else if (mode == 1) {
 		TAILQ_FOREACH(mnet, &stcb->asoc.nets, sctp_next) {
 			if (((mnet->dest_state & SCTP_ADDR_REACHABLE) != SCTP_ADDR_REACHABLE) ||
@@ -656,7 +658,7 @@ start_again:
 					sctp_misc_ints(SCTP_FLIGHT_LOG_DOWN_RSND_TO,
 					    chk->whoTo->flight_size,
 					    chk->book_size,
-					    (uint32_t) (uintptr_t) chk->whoTo,
+					    (uint32_t)(uintptr_t)chk->whoTo,
 					    chk->rec.data.tsn);
 				}
 				sctp_flight_size_decrease(chk);
@@ -665,6 +667,7 @@ start_again:
 				stcb->asoc.peers_rwnd += SCTP_BASE_SYSCTL(sctp_peer_chunk_oh);
 			}
 			chk->sent = SCTP_DATAGRAM_RESEND;
+			chk->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 			SCTP_STAT_INCR(sctps_markedretrans);
 
 			/* reset the TSN for striking and other FR stuff */
@@ -717,13 +720,9 @@ start_again:
 	if (num_mk) {
 		SCTPDBG(SCTP_DEBUG_TIMER1, "LAST TSN marked was %x\n",
 		    tsnlast);
-		SCTPDBG(SCTP_DEBUG_TIMER1, "Num marked for retransmission was %d peer-rwd:%ld\n",
-		    num_mk, (u_long)stcb->asoc.peers_rwnd);
-		SCTPDBG(SCTP_DEBUG_TIMER1, "LAST TSN marked was %x\n",
-		    tsnlast);
-		SCTPDBG(SCTP_DEBUG_TIMER1, "Num marked for retransmission was %d peer-rwd:%d\n",
+		SCTPDBG(SCTP_DEBUG_TIMER1, "Num marked for retransmission was %d peer-rwd:%u\n",
 		    num_mk,
-		    (int)stcb->asoc.peers_rwnd);
+		    stcb->asoc.peers_rwnd);
 	}
 #endif
 	*num_marked = num_mk;
@@ -742,6 +741,7 @@ start_again:
 			chk->whoTo = alt;
 			if (chk->sent != SCTP_DATAGRAM_RESEND) {
 				chk->sent = SCTP_DATAGRAM_RESEND;
+				chk->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 				sctp_ucount_incr(stcb->asoc.sent_queue_retran_cnt);
 				cnt_mk++;
 			}
@@ -784,7 +784,7 @@ start_again:
 					sctp_misc_ints(SCTP_FLIGHT_LOG_UP,
 					    chk->whoTo->flight_size,
 					    chk->book_size,
-					    (uint32_t) (uintptr_t) chk->whoTo,
+					    (uint32_t)(uintptr_t)chk->whoTo,
 					    chk->rec.data.tsn);
 				}
 				sctp_flight_size_increase(chk);
@@ -1086,6 +1086,7 @@ sctp_cookie_timer(struct sctp_inpcb *inp,
 		sctp_ucount_incr(stcb->asoc.sent_queue_retran_cnt);
 	}
 	cookie->sent = SCTP_DATAGRAM_RESEND;
+	cookie->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 	/*
 	 * Now call the output routine to kick out the cookie again, Note we
 	 * don't mark any chunks for retran so that FR will need to kick in
@@ -1132,6 +1133,7 @@ sctp_strreset_timer(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 			sctp_free_remote_addr(chk->whoTo);
 			if (chk->sent != SCTP_DATAGRAM_RESEND) {
 				chk->sent = SCTP_DATAGRAM_RESEND;
+				chk->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 				sctp_ucount_incr(stcb->asoc.sent_queue_retran_cnt);
 			}
 			chk->whoTo = alt;
@@ -1149,6 +1151,7 @@ sctp_strreset_timer(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 	if (strrst->sent != SCTP_DATAGRAM_RESEND)
 		sctp_ucount_incr(stcb->asoc.sent_queue_retran_cnt);
 	strrst->sent = SCTP_DATAGRAM_RESEND;
+	strrst->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 
 	/* restart the timer */
 	sctp_timer_start(SCTP_TIMER_TYPE_STRRESET, inp, stcb, strrst->whoTo);
@@ -1213,6 +1216,7 @@ sctp_asconf_timer(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 				chk->whoTo = alt;
 				if (chk->sent != SCTP_DATAGRAM_RESEND) {
 					chk->sent = SCTP_DATAGRAM_RESEND;
+					chk->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 					sctp_ucount_incr(stcb->asoc.sent_queue_retran_cnt);
 				}
 				atomic_add_int(&alt->ref_count, 1);
@@ -1227,6 +1231,7 @@ sctp_asconf_timer(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 			if (asconf->sent != SCTP_DATAGRAM_RESEND && chk->sent != SCTP_DATAGRAM_UNSENT)
 				sctp_ucount_incr(stcb->asoc.sent_queue_retran_cnt);
 			chk->sent = SCTP_DATAGRAM_RESEND;
+			chk->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 		}
 		if (!(net->dest_state & SCTP_ADDR_REACHABLE)) {
 			/*
@@ -1239,6 +1244,7 @@ sctp_asconf_timer(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		if (asconf->sent != SCTP_DATAGRAM_RESEND)
 			sctp_ucount_incr(stcb->asoc.sent_queue_retran_cnt);
 		asconf->sent = SCTP_DATAGRAM_RESEND;
+		asconf->flags |= CHUNK_FLAGS_FRAGMENT_OK;
 
 		/* send another ASCONF if any and we can do */
 		sctp_send_asconf(stcb, alt, SCTP_ADDR_NOT_LOCKED);
@@ -1431,8 +1437,8 @@ sctp_heartbeat_timer(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 
 			SCTP_GETTIME_TIMEVAL(&diff);
 			timevalsub(&diff, &net->last_sent_time);
-			ms_gone_by = (uint32_t) (diff.tv_sec * 1000) +
-			    (uint32_t) (diff.tv_usec / 1000);
+			ms_gone_by = (uint32_t)(diff.tv_sec * 1000) +
+			    (uint32_t)(diff.tv_usec / 1000);
 		} else {
 			ms_gone_by = 0xffffffff;
 		}
@@ -1473,7 +1479,7 @@ sctp_pathmtu_timer(struct sctp_inpcb *inp,
 
 				net->ro._s_addr = sctp_source_address_selection(inp,
 				    stcb,
-				    (sctp_route_t *) & net->ro,
+				    (sctp_route_t *)&net->ro,
 				    net, 0, stcb->asoc.vrf_id);
 #if defined(INET6) && defined(SCTP_EMBEDDED_V6_SCOPE)
 				if (net->ro._l_addr.sa.sa_family == AF_INET6) {

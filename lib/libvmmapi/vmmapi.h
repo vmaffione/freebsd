@@ -36,7 +36,7 @@
  * API version for out-of-tree consumers like grub-bhyve for making compile
  * time decisions.
  */
-#define	VMMAPI_VERSION	0102	/* 2 digit major followed by 2 digit minor */
+#define	VMMAPI_VERSION	0103	/* 2 digit major followed by 2 digit minor */
 
 struct iovec;
 struct vmctx;
@@ -102,6 +102,7 @@ int	vm_mmap_memseg(struct vmctx *ctx, vm_paddr_t gpa, int segid,
 	    vm_ooffset_t segoff, size_t len, int prot);
 
 int	vm_create(const char *name);
+int	vm_get_device_fd(struct vmctx *ctx);
 struct vmctx *vm_open(const char *name);
 void	vm_destroy(struct vmctx *ctx);
 int	vm_parse_memsize(const char *optarg, size_t *memsize);
@@ -168,6 +169,8 @@ int	vm_map_user_buf(struct vmctx *ctx, vm_paddr_t gpa, size_t len,
 			void *host_buf, int map);
 int	vm_io_reg_handler(struct vmctx *ctx, uint16_t port, uint16_t in,
 	    uint32_t mask_data, uint32_t data, enum vm_io_regh_type type, void *arg);
+const cap_ioctl_t *vm_get_ioctls(size_t *len);
+
 /*
  * Return a pointer to the statistics buffer. Note that this is not MT-safe.
  */

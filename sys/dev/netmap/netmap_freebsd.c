@@ -116,7 +116,7 @@ nm_os_ifnet_lock(void)
 void
 nm_os_ifnet_unlock(void)
 {
-	IFNET_WUNLOCK();
+	IFNET_RUNLOCK();
 }
 
 static int netmap_use_count = 0;
@@ -666,7 +666,7 @@ nm_os_pt_memdev_iomap(struct ptnetmap_memdev *ptn_dev, vm_paddr_t *nm_paddr,
 			&rid, 0, ~0, *mem_size, RF_ACTIVE);
 	if (ptn_dev->pci_mem == NULL) {
 		*nm_paddr = 0;
-		*nm_addr = 0;
+		*nm_addr = NULL;
 		return ENOMEM;
 	}
 
@@ -1108,8 +1108,8 @@ nm_kthread_worker(void *data)
 				continue;
 			} else if (nmk->run) {
 				/* wait on event with one second timeout */
-				msleep_spin((void *)ctx->cfg.wchan, &nmk->worker_lock,
-					    "nmk_ev", hz);
+				msleep((void *)(uintptr_t)ctx->cfg.wchan,
+					&nmk->worker_lock, 0, "nmk_ev", hz);
 				nmk->scheduled++;
 			}
 			mtx_unlock_spin(&nmk->worker_lock);
@@ -1140,7 +1140,7 @@ nm_os_kthread_create(struct nm_kthread_cfg *cfg, unsigned int cfgtype,
 	if (!nmk)
 		return NULL;
 
-	mtx_init(&nmk->worker_lock, "nm_kthread lock", NULL, MTX_SPIN);
+	mtx_init(&nmk->worker_lock, "nm_kthread lock", NULL, MTX_DEF);
 	nmk->worker_ctx.worker_fn = cfg->worker_fn;
 	nmk->worker_ctx.worker_private = cfg->worker_private;
 	nmk->worker_ctx.type = cfg->type;

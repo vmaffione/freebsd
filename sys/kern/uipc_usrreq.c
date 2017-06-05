@@ -552,7 +552,7 @@ restart:
 
 	UNP_LINK_WLOCK();
 	UNP_PCB_LOCK(unp);
-	VOP_UNP_BIND(vp, unp->unp_socket);
+	VOP_UNP_BIND(vp, unp);
 	unp->unp_vnode = vp;
 	unp->unp_addr = soun;
 	unp->unp_flags &= ~UNP_BINDING;
@@ -670,9 +670,6 @@ uipc_detach(struct socket *so)
 	UNP_LINK_WLOCK();
 	UNP_PCB_LOCK(unp);
 
-	/*
-	 * XXXRW: Should assert vp->v_socket == so.
-	 */
 	if ((vp = unp->unp_vnode) != NULL) {
 		VOP_UNP_DETACH(vp);
 		unp->unp_vnode = NULL;
@@ -743,6 +740,9 @@ uipc_listen(struct socket *so, int backlog, struct thread *td)
 	struct unpcb *unp;
 	int error;
 
+	if (so->so_type != SOCK_STREAM && so->so_type != SOCK_SEQPACKET)
+		return (EOPNOTSUPP);
+
 	unp = sotounpcb(so);
 	KASSERT(unp != NULL, ("uipc_listen: unp == NULL"));
 
@@ -758,7 +758,6 @@ uipc_listen(struct socket *so, int backlog, struct thread *td)
 	error = solisten_proto_check(so);
 	if (error == 0) {
 		cru2x(td->td_ucred, &unp->unp_peercred);
-		unp->unp_flags |= UNP_HAVEPCCACHED;
 		solisten_proto(so, backlog);
 	}
 	SOCK_UNLOCK(so);
@@ -1383,11 +1382,12 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 	 * and to protect simultaneous locking of multiple pcbs.
 	 */
 	UNP_LINK_WLOCK();
-	VOP_UNP_CONNECT(vp, &so2);
-	if (so2 == NULL) {
+	VOP_UNP_CONNECT(vp, &unp2);
+	if (unp2 == NULL) {
 		error = ECONNREFUSED;
 		goto bad2;
 	}
+	so2 = unp2->unp_socket;
 	if (so->so_type != so2->so_type) {
 		error = EPROTOTYPE;
 		goto bad2;
@@ -1428,8 +1428,6 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 		 * listen(); uipc_listen() cached that process's credentials
 		 * at that time so we can use them now.
 		 */
-		KASSERT(unp2->unp_flags & UNP_HAVEPCCACHED,
-		    ("unp_connect: listener without cached peercred"));
 		memcpy(&unp->unp_peercred, &unp2->unp_peercred,
 		    sizeof(unp->unp_peercred));
 		unp->unp_flags |= UNP_HAVEPC;
@@ -1899,6 +1897,7 @@ unp_internalize(struct mbuf **controlp, struct thread *td)
 	struct filedescent *fde, **fdep, *fdev;
 	struct file *fp;
 	struct timeval *tv;
+	struct timespec *ts;
 	int i, *fdp;
 	void *data;
 	socklen_t clen = control->m_len, datalen;
@@ -2017,6 +2016,30 @@ unp_internalize(struct mbuf **controlp, struct thread *td)
 			bt = (struct bintime *)
 			    CMSG_DATA(mtod(*controlp, struct cmsghdr *));
 			bintime(bt);
+			break;
+
+		case SCM_REALTIME:
+			*controlp = sbcreatecontrol(NULL, sizeof(*ts),
+			    SCM_REALTIME, SOL_SOCKET);
+			if (*controlp == NULL) {
+				error = ENOBUFS;
+				goto out;
+			}
+			ts = (struct timespec *)
+			    CMSG_DATA(mtod(*controlp, struct cmsghdr *));
+			nanotime(ts);
+			break;
+
+		case SCM_MONOTONIC:
+			*controlp = sbcreatecontrol(NULL, sizeof(*ts),
+			    SCM_MONOTONIC, SOL_SOCKET);
+			if (*controlp == NULL) {
+				error = ENOBUFS;
+				goto out;
+			}
+			ts = (struct timespec *)
+			    CMSG_DATA(mtod(*controlp, struct cmsghdr *));
+			nanouptime(ts);
 			break;
 
 		default:
@@ -2426,7 +2449,6 @@ unp_scan(struct mbuf *m0, void (*op)(struct filedescent **, int))
 void
 vfs_unp_reclaim(struct vnode *vp)
 {
-	struct socket *so;
 	struct unpcb *unp;
 	int active;
 
@@ -2436,10 +2458,7 @@ vfs_unp_reclaim(struct vnode *vp)
 
 	active = 0;
 	UNP_LINK_WLOCK();
-	VOP_UNP_CONNECT(vp, &so);
-	if (so == NULL)
-		goto done;
-	unp = sotounpcb(so);
+	VOP_UNP_CONNECT(vp, &unp);
 	if (unp == NULL)
 		goto done;
 	UNP_PCB_LOCK(unp);
@@ -2473,10 +2492,6 @@ db_print_unpflags(int unp_flags)
 	comma = 0;
 	if (unp_flags & UNP_HAVEPC) {
 		db_printf("%sUNP_HAVEPC", comma ? ", " : "");
-		comma = 1;
-	}
-	if (unp_flags & UNP_HAVEPCCACHED) {
-		db_printf("%sUNP_HAVEPCCACHED", comma ? ", " : "");
 		comma = 1;
 	}
 	if (unp_flags & UNP_WANTCRED) {

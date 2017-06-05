@@ -62,8 +62,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_object.h>
 #include <vm/vm_pager.h>
 
-extern vm_page_t bogus_page;
-
 /*
  * Structure describing a single sendfile(2) I/O, which may consist of
  * several underlying pager I/Os.
@@ -209,12 +207,12 @@ xfsize(int i, int n, off_t off, off_t len)
 /*
  * Helper function to get offset within object for i page.
  */
-static inline vm_offset_t
+static inline vm_ooffset_t
 vmoff(int i, off_t off)
 {
 
 	if (i == 0)
-		return ((vm_offset_t)off);
+		return ((vm_ooffset_t)off);
 
 	return (trunc_page(off + i * PAGE_SIZE));
 }
@@ -691,11 +689,10 @@ retry_space:
 				goto done;
 			}
 			if (va.va_size != obj_size) {
-				if (nbytes == 0)
-					rem += va.va_size - obj_size;
-				else if (offset + nbytes > va.va_size)
-					rem -= (offset + nbytes - va.va_size);
 				obj_size = va.va_size;
+				rem = nbytes ?
+				    omin(nbytes + offset, obj_size) : obj_size;
+				rem -= off;
 			}
 		}
 

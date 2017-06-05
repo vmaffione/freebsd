@@ -46,6 +46,9 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#ifndef WITHOUT_CAPSICUM
+#include <sys/capsicum.h>
+#endif
 #include <sys/linker_set.h>
 #include <sys/select.h>
 #include <sys/uio.h>
@@ -54,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <net/ethernet.h>
 #include <net/if.h> /* IFNAMSIZ */
 
+#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -65,6 +69,7 @@ __FBSDID("$FreeBSD$");
 #include <assert.h>
 #include <pthread.h>
 #include <pthread_np.h>
+#include <sysexits.h>
 
 #include "bhyverun.h"
 #include "pci_emul.h"

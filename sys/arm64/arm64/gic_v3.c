@@ -437,11 +437,11 @@ arm_gic_v3_intr(void *arg)
 #endif
 		} else if (active_irq >= GIC_FIRST_PPI &&
 		    active_irq <= GIC_LAST_SPI) {
-			if (gi->gi_pol == INTR_TRIGGER_EDGE)
+			if (gi->gi_trig == INTR_TRIGGER_EDGE)
 				gic_icc_write(EOIR1, gi->gi_irq);
 
 			if (intr_isrc_dispatch(&gi->gi_isrc, tf) != 0) {
-				if (gi->gi_pol != INTR_TRIGGER_EDGE)
+				if (gi->gi_trig != INTR_TRIGGER_EDGE)
 					gic_icc_write(EOIR1, gi->gi_irq);
 				gic_v3_disable_intr(sc->dev, &gi->gi_isrc);
 				device_printf(sc->dev,
@@ -781,7 +781,7 @@ gic_v3_post_filter(device_t dev, struct intr_irqsrc *isrc)
 {
 	struct gic_v3_irqsrc *gi = (struct gic_v3_irqsrc *)isrc;
 
-	if (gi->gi_pol == INTR_TRIGGER_EDGE)
+	if (gi->gi_trig == INTR_TRIGGER_EDGE)
 		return;
 
 	gic_icc_write(EOIR1, gi->gi_irq);
@@ -1040,6 +1040,10 @@ gic_v3_dist_init(struct gic_v3_softc *sc)
 	/*
 	 * 2. Configure the Distributor
 	 */
+	/* Set all SPIs to be Group 1 Non-secure */
+	for (i = GIC_FIRST_SPI; i < sc->gic_nirqs; i += GICD_I_PER_IGROUPRn)
+		gic_d_write(sc, 4, GICD_IGROUPR(i), 0xFFFFFFFF);
+
 	/* Set all global interrupts to be level triggered, active low. */
 	for (i = GIC_FIRST_SPI; i < sc->gic_nirqs; i += GICD_I_PER_ICFGRn)
 		gic_d_write(sc, 4, GICD_ICFGR(i), 0x00000000);
@@ -1205,6 +1209,10 @@ gic_v3_redist_init(struct gic_v3_softc *sc)
 	err = gic_v3_redist_wake(sc);
 	if (err != 0)
 		return (err);
+
+	/* Configure SGIs and PPIs to be Group1 Non-secure */
+	gic_r_write(sc, 4, GICR_SGI_BASE_SIZE + GICR_IGROUPR0,
+	    0xFFFFFFFF);
 
 	/* Disable SPIs */
 	gic_r_write(sc, 4, GICR_SGI_BASE_SIZE + GICR_ICENABLER0,

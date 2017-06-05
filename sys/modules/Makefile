@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-SYSDIR?=${.CURDIR}/..
+SYSDIR?=${SRCTOP}/sys
 .include "${SYSDIR}/conf/kern.opts.mk"
 
 SUBDIR_PARALLEL=
@@ -27,13 +27,13 @@ SUBDIR=	\
 	age \
 	${_agp} \
 	aha \
-	${_ahb} \
 	ahci \
 	${_aic} \
 	aic7xxx \
 	alc \
 	ale \
 	alq \
+	${_amd_ecc_inject} \
 	${_amdsbwd} \
 	${_amdtemp} \
 	amr \
@@ -46,12 +46,20 @@ SUBDIR=	\
 	${_asmc} \
 	ata \
 	ath \
+	ath_dfs \
+	ath_hal \
+	ath_hal_ar5210 \
+	ath_hal_ar5211 \
+	ath_hal_ar5212 \
+	ath_hal_ar5416 \
+	ath_hal_ar9300 \
+	ath_main \
+	ath_rate \
 	ath_pci \
 	${_autofs} \
 	${_auxio} \
 	${_bce} \
 	bfe \
-	bhnd \
 	bge \
 	bhnd \
 	${_bxe} \
@@ -65,8 +73,6 @@ SUBDIR=	\
 	bwn_pci \
 	${_bytgpio} \
 	cam \
-	${_canbepm} \
-	${_canbus} \
 	${_cardbus} \
 	${_carp} \
 	cas \
@@ -76,6 +82,7 @@ SUBDIR=	\
 	cd9660_iconv \
 	${_ce} \
 	${_cfi} \
+	chacha20 \
 	${_chromebook_platform} \
 	${_ciss} \
 	cloudabi \
@@ -92,7 +99,6 @@ SUBDIR=	\
 	${_crypto} \
 	${_cryptodev} \
 	${_cs} \
-	${_ct} \
 	${_ctau} \
 	ctl \
 	${_cxgb} \
@@ -110,7 +116,7 @@ SUBDIR=	\
 	${_efirt} \
 	${_elink} \
 	${_em} \
-	en \
+	${_ena} \
 	${_ep} \
 	${_epic} \
 	esp \
@@ -119,7 +125,6 @@ SUBDIR=	\
 	${_ex} \
 	${_exca} \
 	ext2fs \
-	${_fatm} \
 	fdc \
 	fdescfs \
 	${_fe} \
@@ -133,7 +138,6 @@ SUBDIR=	\
 	${_glxiic} \
 	${_glxsb} \
 	gpio \
-	hatm \
 	hifn \
 	hme \
 	${_hpt27xx} \
@@ -142,6 +146,8 @@ SUBDIR=	\
 	${_hptnr} \
 	${_hptrr} \
 	hwpmc \
+	${_hwpmc_mips24k} \
+	${_hwpmc_mips74k} \
 	${_hyperv} \
 	i2c \
         ${_ibcore} \
@@ -163,9 +169,9 @@ SUBDIR=	\
 	if_tun \
 	if_vlan \
 	if_vxlan \
-	${_igb} \
 	${_iir} \
 	imgact_binmisc \
+	${_intelspi} \
 	${_io} \
 	${_ioat} \
         ${_ipoib} \
@@ -175,10 +181,12 @@ SUBDIR=	\
 	ipfw_nat \
 	${_ipfw_nat64} \
 	${_ipfw_nptv6} \
+	${_ipfw_pmod} \
 	${_ipmi} \
 	ip6_mroute_mod \
 	ip_mroute_mod \
 	${_ips} \
+	${_ipsec} \
 	${_ipw} \
 	${_ipwfw} \
 	${_isci} \
@@ -265,7 +273,6 @@ SUBDIR=	\
 	${_nctgpio} \
 	${_ncv} \
 	${_ndis} \
-	netfpga10g \
 	${_netgraph} \
 	${_nfe} \
 	nfscl \
@@ -289,7 +296,6 @@ SUBDIR=	\
 	ow \
 	${_padlock} \
 	${_padlock_rng} \
-	patm \
 	${_pccard} \
 	${_pcfclock} \
 	pcn \
@@ -297,7 +303,6 @@ SUBDIR=	\
 	${_pflog} \
 	${_pfsync} \
 	plip \
-	${_pmc} \
 	${_pms} \
 	ppbus \
 	ppc \
@@ -312,6 +317,7 @@ SUBDIR=	\
 	${_qlxge} \
 	${_qlxgb} \
 	${_qlxgbe} \
+	${_qlnx} \
 	ral \
 	${_ralfw} \
 	${_random_fortuna} \
@@ -332,6 +338,7 @@ SUBDIR=	\
 	scc \
 	${_scsi_low} \
 	sdhci \
+	${_sdhci_acpi} \
 	sdhci_pci \
 	sem \
 	send \
@@ -345,24 +352,20 @@ SUBDIR=	\
 	sk \
 	smbfs \
 	sn \
-	${_snc} \
 	snp \
 	sound \
 	${_speaker} \
+	spigen \
 	${_splash} \
 	${_sppp} \
 	ste \
 	${_stg} \
 	stge \
-	${_streams} \
-	${_svr4} \
 	${_sym} \
 	${_syscons} \
 	sysvipc \
+	tcp \
 	${_ti} \
-	${_tcp_fastpath} \
-	tests/framework \
-	tests/callout_test \
 	tl \
 	tmpfs \
 	${_toecore} \
@@ -381,7 +384,6 @@ SUBDIR=	\
 	uinput \
 	unionfs \
 	usb \
-	utopia \
 	${_vesa} \
 	${_virtio} \
 	vge \
@@ -427,7 +429,7 @@ SUBDIR+=	opensolaris
 .endif
 
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
-.if exists(${.CURDIR}/../opencrypto)
+.if exists(${SRCTOP}/sys/opencrypto)
 _crypto=	crypto
 _cryptodev=	cryptodev
 _random_fortuna=random_fortuna
@@ -440,10 +442,6 @@ _random_other=	random_other
 SUBDIR+=	cuse
 .endif
 
-.if ${MK_EXTRA_TCP_STACKS} != "no" || defined(ALL_MODULES)
-_tcp_fastpath=	tcp/fastpath
-.endif
-
 .if (${MK_INET_SUPPORT} != "no" || ${MK_INET6_SUPPORT} != "no") || \
 	defined(ALL_MODULES)
 _carp=		carp
@@ -451,6 +449,10 @@ _toecore=	toecore
 _if_enc=	if_enc
 _if_gif=	if_gif
 _if_gre=	if_gre
+_ipfw_pmod=	ipfw_pmod
+.if ${MK_IPSEC_SUPPORT} != "no"
+_ipsec=		ipsec
+.endif
 .endif
 
 .if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
@@ -476,6 +478,7 @@ _ipfilter=	ipfilter
 .endif
 
 .if ${MK_ISCSI} != "no" || defined(ALL_MODULES)
+SUBDIR+=	cfiscsi
 SUBDIR+=	iscsi
 SUBDIR+=	iscsi_initiator
 .endif
@@ -500,16 +503,18 @@ _pfsync=	pfsync
 
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bce=		bce
-_fatm=		fatm
 _fxp=		fxp
 _ispfw=		ispfw
+_sf=		sf
+_ti=		ti
+_txp=		txp
+
+.if ${MACHINE_CPUARCH} != "mips"
 _mwlfw=		mwlfw
 _otusfw=	otusfw
 _ralfw=		ralfw
 _rtwnfw=	rtwnfw
-_sf=		sf
-_ti=		ti
-_txp=		txp
+.endif
 .endif
 
 .if ${MK_SOURCELESS_UCODE} != "no" && ${MACHINE_CPUARCH} != "arm" && \
@@ -519,8 +524,17 @@ _txp=		txp
 _cxgbe=		cxgbe
 .endif
 
+.if ${MK_TESTS} != "no" || defined(ALL_MODULES)
+SUBDIR+=	tests
+.endif
+
 .if ${MK_ZFS} != "no" || defined(ALL_MODULES)
 SUBDIR+=	zfs
+.endif
+
+.if (${MACHINE_CPUARCH} == "mips" && ${MACHINE_ARCH:Mmips64} == "")
+_hwpmc_mips24k=	hwpmc_mips24k
+_hwpmc_mips74k=	hwpmc_mips74k
 .endif
 
 .if ${MACHINE_CPUARCH} != "aarch64" && ${MACHINE_CPUARCH} != "arm" && \
@@ -543,7 +557,6 @@ _cxgb=		cxgb
 .if ${MACHINE_CPUARCH} == "aarch64"
 _armv8crypto=	armv8crypto
 _em=		em
-_igb=		igb
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
@@ -563,6 +576,7 @@ _drm=		drm
 _drm2=		drm2
 _ed=		ed
 _em=		em
+_ena=		ena
 _ep=		ep
 _et=		et
 _exca=		exca
@@ -571,7 +585,6 @@ _fe=		fe
 _ibcore=        ibcore
 .endif
 _if_ndis=	if_ndis
-_igb=		igb
 _io=		io
 .if ${MK_OFED} != "no" || defined(ALL_MODULES)
 _ipoib=         ipoib
@@ -598,13 +611,14 @@ _vxge=  	vxge
 _wbwd=		wbwd
 _wi=		wi
 _xe=		xe
-.if ${MACHINE} != "pc98"
+
 _aac=		aac
 _aacraid=	aacraid
 _acpi=		acpi
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
 _aesni=		aesni
 .endif
+_amd_ecc_inject=amd_ecc_inject
 _amdsbwd=	amdsbwd
 _amdtemp=	amdtemp
 _arcmsr=	arcmsr
@@ -627,6 +641,7 @@ _hyperv=	hyperv
 _ichwd=		ichwd
 _ida=		ida
 _iir=		iir
+_intelspi=	intelspi
 _ipmi=		ipmi
 _ips=		ips
 _isci=		isci
@@ -666,6 +681,7 @@ _padlock_rng=	padlock_rng
 _rdrand_rng=	rdrand_rng
 .endif
 _s3=		s3
+_sdhci_acpi=	sdhci_acpi
 _tpm=		tpm
 _twa=		twa
 _vesa=		vesa
@@ -676,7 +692,6 @@ _wpi=		wpi
 _wpifw=		wpifw
 .endif
 _x86bios=	x86bios
-.endif
 .endif
 
 .if ${MACHINE_CPUARCH} == "amd64"
@@ -691,6 +706,7 @@ _pms=		pms
 _qlxge=		qlxge
 _qlxgb=		qlxgb
 _qlxgbe=	qlxgbe
+_qlnx=		qlnx
 _sfxge=		sfxge
 
 .if ${MK_BHYVE} != "no" || defined(ALL_MODULES)
@@ -724,26 +740,13 @@ _nsp=		nsp
 _pcfclock=	pcfclock
 _pst=		pst
 _sbni=		sbni
-_streams=	streams
 _stg=		stg
-_svr4=		svr4
-.if ${MACHINE} == "i386"
-.if ${MK_EISA} != "no"
-_ahb=		ahb
-.endif
 _cm=		cm
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ctau=		ctau
 .endif
 _dpt=		dpt
 _ex=		ex
-.elif ${MACHINE} == "pc98"
-_canbepm=	canbepm
-_canbus=	canbus
-_ct=		ct
-_pmc=		pmc
-_snc=		snc
-.endif
 .endif
 
 .if ${MACHINE_CPUARCH} == "arm"
@@ -777,7 +780,6 @@ _nvram=		powermac_nvram
 _auxio=		auxio
 _em=		em
 _epic=		epic
-_igb=		igb
 .endif
 
 .if (${MACHINE_CPUARCH} == "amd64" || ${MACHINE_ARCH} == "armv6" || \

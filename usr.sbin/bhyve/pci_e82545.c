@@ -31,6 +31,9 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
+#ifndef WITHOUT_CAPSICUM
+#include <sys/capsicum.h>
+#endif
 #include <sys/limits.h>
 #include <sys/ioctl.h>
 #include <sys/uio.h>
@@ -39,12 +42,14 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp.h>
 #include <net/if.h> /* IFNAMSIZ */
 
+#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <md5.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sysexits.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <pthread_np.h>

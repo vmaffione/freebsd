@@ -65,10 +65,10 @@ void
  * Function prototypes
  */
 int32_t
-sctp_map_assoc_state(int);
+        sctp_map_assoc_state(int);
 
 uint32_t
-sctp_get_ifa_hash_val(struct sockaddr *addr);
+         sctp_get_ifa_hash_val(struct sockaddr *addr);
 
 struct sctp_ifa *
          sctp_find_ifa_in_ep(struct sctp_inpcb *inp, struct sockaddr *addr, int hold_lock);
@@ -387,6 +387,11 @@ sctp_auditing(int, struct sctp_inpcb *, struct sctp_tcb *,
     struct sctp_nets *);
 void sctp_audit_log(uint8_t, uint8_t);
 
+#endif
+#if defined(INET6) || defined(INET)
+uint32_t sctp_min_mtu(uint32_t, uint32_t, uint32_t);
+void sctp_hc_set_mtu(union sctp_sockstore *, uint16_t, uint32_t);
+uint32_t sctp_hc_get_mtu(union sctp_sockstore *, uint16_t);
 #endif
 #endif				/* _KERNEL */
 #endif
