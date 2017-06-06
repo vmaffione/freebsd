@@ -130,7 +130,7 @@ PMDL win32_build_user_vm_map(struct netmap_mem_d* nmd);
 int	   netmap_mem_finalize(struct netmap_mem_d *, struct netmap_adapter *);
 int 	   netmap_mem_init(void);
 void 	   netmap_mem_fini(void);
-struct netmap_if * netmap_mem_if_new(struct netmap_adapter *);
+struct netmap_if * netmap_mem_if_new(struct netmap_adapter *, struct netmap_priv_d *);
 void 	   netmap_mem_if_delete(struct netmap_adapter *, struct netmap_if *);
 int	   netmap_mem_rings_create(struct netmap_adapter *);
 void	   netmap_mem_rings_delete(struct netmap_adapter *);
@@ -142,8 +142,10 @@ struct netmap_mem_d* netmap_mem_private_new( u_int txr, u_int txd, u_int rxr, u_
 		u_int extra_bufs, u_int npipes, int* error);
 void	   netmap_mem_delete(struct netmap_mem_d *);
 
-struct netmap_mem_d* netmap_mem_get(struct netmap_mem_d *);
-void netmap_mem_put(struct netmap_mem_d *);
+#define netmap_mem_get(d) __netmap_mem_get(d, __FUNCTION__, __LINE__)
+#define netmap_mem_put(d) __netmap_mem_put(d, __FUNCTION__, __LINE__)
+struct netmap_mem_d* __netmap_mem_get(struct netmap_mem_d *, const char *, int);
+void __netmap_mem_put(struct netmap_mem_d *, const char *, int);
 struct netmap_mem_d* netmap_mem_find(nm_memid_t);
 
 #ifdef WITH_PTNETMAP_GUEST
@@ -155,7 +157,7 @@ struct netmap_mem_d* netmap_mem_pt_guest_attach(struct ptnetmap_memdev *, uint16
 int netmap_mem_pt_guest_ifp_del(struct netmap_mem_d *, struct ifnet *);
 #endif /* WITH_PTNETMAP_GUEST */
 
-int netmap_mem_pools_info_get(struct nmreq *, struct netmap_adapter *);
+int netmap_mem_pools_info_get(struct nmreq *, struct netmap_mem_d *);
 
 #define NETMAP_MEM_PRIVATE	0x2	/* allocator uses private address space */
 #define NETMAP_MEM_IO		0x4	/* the underlying memory is mmapped I/O */
