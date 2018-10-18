@@ -409,7 +409,7 @@ ixgbe_netmap_rxsync(struct netmap_kring *kring, int flags)
 	 */
 	if (netmap_no_pendintr || force_update) {
 		int crclen = (ix_crcstrip) ? 0 : 4;
-		uint16_t slot_flags = kring->nkr_slot_flags;
+		uint16_t slot_flags = 0;
 
 		nic_i = rxr->next_to_check; // or also k2n(kring->nr_hwtail)
 		nm_i = netmap_idx_n2k(kring, nic_i);
