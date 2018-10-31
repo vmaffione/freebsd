@@ -3,14 +3,14 @@
 #
 # For multiple programs using a single source file each,
 # we can just define 'progs' and create custom targets.
-PROGS	=	pkt-gen bridge vale-ctl
+PROGS	=	pkt-gen bridge vale-ctl lb nmreplay
 
 CLEANFILES = $(PROGS) *.o
 MAN=
 CFLAGS += -Werror -Wall # -nostdinc -I/usr/include -I../../../sys
 CFLAGS += -Wextra
 
-LDFLAGS += -lpthread
+LDFLAGS += -lpthread -lm
 .ifdef WITHOUT_PCAP
 CFLAGS += -DNO_PCAP
 .else
@@ -30,3 +30,10 @@ bridge: bridge.o
 
 vale-ctl: vale-ctl.o
 	$(CC) $(CFLAGS) -o vale-ctl vale-ctl.o
+
+lb: lb.o pkt_hash.o
+	$(CC) $(CFLAGS) -o lb lb.o pkt_hash.o $(LDFLAGS)
+
+nmreplay: nmreplay.o
+	$(CC) $(CFLAGS) -o nmreplay nmreplay.o $(LDFLAGS)
+
