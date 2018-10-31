@@ -134,7 +134,6 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 		//nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != head; n++) {
 			/* we use an empty header here */
-			static struct virtio_net_hdr_mrg_rxbuf hdr;
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			u_int len = slot->len;
 			uint64_t paddr;
@@ -148,10 +147,12 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 			 * and kick the hypervisor (if necessary).
 			 */
 			sglist_reset(sg); // cheap
-			err = sglist_append(sg, &hdr, sc->vtnet_hdr_size);
+			// TODO cache physical address of vtntx_shrhdr
+			err = sglist_append(sg, &txq->vtntx_shrhdr, sc->vtnet_hdr_size);
 			err = sglist_append_phys(sg, paddr, len);
-			/* use na as the cookie */
-                        err = virtqueue_enqueue(vq, txq, sg, sg->sg_nseg, 0);
+                        err = virtqueue_enqueue(vq, /*cookie=*/txq, sg,
+						/*readable=*/sg->sg_nseg,
+						/*writeable=*/0);
                         if (unlikely(err < 0)) {
                                 nm_prerr("virtqueue_enqueue() failed: %d\n", err);
                                 break;
