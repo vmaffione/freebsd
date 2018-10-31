@@ -523,6 +523,9 @@ int netmap_generic_rings = 1;
 /* Non-zero to enable checksum offloading in NIC drivers */
 int netmap_generic_hwcsum = 0;
 
+/* Non-zero if ptnet devices are allowed to use virtio-net headers. */
+int ptnet_vnet_hdr = 1;
+
 /*
  * SYSCTL calls are grouped between SYSBEGIN and SYSEND to be emulated
  * in some other operating systems
@@ -562,6 +565,8 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, generic_rings, CTLFLAG_RW,
 SYSCTL_INT(_dev_netmap, OID_AUTO, generic_txqdisc, CTLFLAG_RW,
 		&netmap_generic_txqdisc, 0, "Use qdisc for generic adapters");
 #endif
+SYSCTL_INT(_dev_netmap, OID_AUTO, ptnet_vnet_hdr, CTLFLAG_RW, &ptnet_vnet_hdr,
+		0, "Allow ptnet devices to use virtio-net headers");
 
 SYSEND;
 
@@ -1022,14 +1027,6 @@ netmap_do_unregif(struct netmap_priv_d *priv)
 	/* mark the priv as unregistered */
 	priv->np_na = NULL;
 	priv->np_nifp = NULL;
-}
-
-/* call with NMG_LOCK held */
-static __inline int
-nm_si_user(struct netmap_priv_d *priv, enum txrx t)
-{
-	return (priv->np_na != NULL &&
-		(priv->np_qlast[t] - priv->np_qfirst[t] > 1));
 }
 
 struct netmap_priv_d*
@@ -1725,7 +1722,7 @@ nm_rxsync_prologue(struct netmap_kring *kring, struct netmap_ring *ring)
 
 /*
  * Error routine called when txsync/rxsync detects an error.
- * Can't do much more than resetting head =cur = hwcur, tail = hwtail
+ * Can't do much more than resetting head = cur = hwcur, tail = hwtail
  * Return 1 on reinit.
  *
  * This routine is only called by the upper half of the kernel.
@@ -1907,6 +1904,7 @@ netmap_unset_ringid(struct netmap_priv_d *priv)
 	}
 	priv->np_flags = 0;
 	priv->np_txpoll = 0;
+	priv->np_kloop_state = 0;
 }
 
 
@@ -1999,6 +1997,110 @@ static int
 nm_priv_rx_enabled(struct netmap_priv_d *priv)
 {
 	return (priv->np_qfirst[NR_RX] != priv->np_qlast[NR_RX]);
+}
+
+/* Validate the CSB entries for both directions (atok and ktoa).
+ * To be called under NMG_LOCK(). */
+static int
+netmap_csb_validate(struct netmap_priv_d *priv, struct nmreq_opt_csb *csbo)
+{
+	struct nm_csb_atok *csb_atok_base =
+		(struct nm_csb_atok *)(uintptr_t)csbo->csb_atok;
+	struct nm_csb_ktoa *csb_ktoa_base =
+		(struct nm_csb_ktoa *)(uintptr_t)csbo->csb_ktoa;
+	enum txrx t;
+	int num_rings[NR_TXRX], tot_rings;
+	size_t entry_size[2];
+	void *csb_start[2];
+	int i;
+
+	if (priv->np_kloop_state & NM_SYNC_KLOOP_RUNNING) {
+		nm_prerr("Cannot update CSB while kloop is running\n");
+		return EBUSY;
+	}
+
+	tot_rings = 0;
+	for_rx_tx(t) {
+		num_rings[t] = priv->np_qlast[t] - priv->np_qfirst[t];
+		tot_rings += num_rings[t];
+	}
+	if (tot_rings <= 0)
+		return 0;
+
+	if (!(priv->np_flags & NR_EXCLUSIVE)) {
+		nm_prerr("CSB mode requires NR_EXCLUSIVE\n");
+		return EINVAL;
+	}
+
+	entry_size[0] = sizeof(*csb_atok_base);
+	entry_size[1] = sizeof(*csb_ktoa_base);
+	csb_start[0] = (void *)csb_atok_base;
+	csb_start[1] = (void *)csb_ktoa_base;
+
+	for (i = 0; i < 2; i++) {
+		/* On Linux we could use access_ok() to simplify
+		 * the validation. However, the advantage of
+		 * this approach is that it works also on
+		 * FreeBSD. */
+		size_t csb_size = tot_rings * entry_size[i];
+		void *tmp;
+		int err;
+
+		if ((uintptr_t)csb_start[i] & (entry_size[i]-1)) {
+			nm_prerr("Unaligned CSB address\n");
+			return EINVAL;
+		}
+
+		tmp = nm_os_malloc(csb_size);
+		if (!tmp)
+			return ENOMEM;
+		if (i == 0) {
+			/* Application --> kernel direction. */
+			err = copyin(csb_start[i], tmp, csb_size);
+		} else {
+			/* Kernel --> application direction. */
+			memset(tmp, 0, csb_size);
+			err = copyout(tmp, csb_start[i], csb_size);
+		}
+		nm_os_free(tmp);
+		if (err) {
+			nm_prerr("Invalid CSB address\n");
+			return err;
+		}
+	}
+
+	priv->np_csb_atok_base = csb_atok_base;
+	priv->np_csb_ktoa_base = csb_ktoa_base;
+
+	/* Initialize the CSB. */
+	for_rx_tx(t) {
+		for (i = 0; i < num_rings[t]; i++) {
+			struct netmap_kring *kring =
+				NMR(priv->np_na, t)[i + priv->np_qfirst[t]];
+			struct nm_csb_atok *csb_atok = csb_atok_base + i;
+			struct nm_csb_ktoa *csb_ktoa = csb_ktoa_base + i;
+
+			if (t == NR_RX) {
+				csb_atok += num_rings[NR_TX];
+				csb_ktoa += num_rings[NR_TX];
+			}
+
+			CSB_WRITE(csb_atok, head, kring->rhead);
+			CSB_WRITE(csb_atok, cur, kring->rcur);
+			CSB_WRITE(csb_atok, appl_need_kick, 1);
+			CSB_WRITE(csb_atok, sync_flags, 1);
+			CSB_WRITE(csb_ktoa, hwcur, kring->nr_hwcur);
+			CSB_WRITE(csb_ktoa, hwtail, kring->nr_hwtail);
+			CSB_WRITE(csb_ktoa, kern_need_kick, 1);
+
+			nm_prinf("csb_init for kring %s: head %u, cur %u, "
+				"hwcur %u, hwtail %u\n", kring->name,
+				kring->rhead, kring->rcur, kring->nr_hwcur,
+				kring->nr_hwtail);
+		}
+	}
+
+	return 0;
 }
 
 /*
@@ -2295,14 +2397,10 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 	case NIOCCTRL: {
 		struct nmreq_header *hdr = (struct nmreq_header *)data;
 
-		if (hdr->nr_version != NETMAP_API) {
-			D("API mismatch for reqtype %d: got %d need %d",
-				hdr->nr_version,
-				hdr->nr_version, NETMAP_API);
-			hdr->nr_version = NETMAP_API;
-		}
 		if (hdr->nr_version < NETMAP_MIN_API ||
 		    hdr->nr_version > NETMAP_MAX_API) {
+			D("API mismatch: got %d need %d",
+				hdr->nr_version, NETMAP_API);
 			return EINVAL;
 		}
 
@@ -2329,9 +2427,9 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 			/* Protect access to priv from concurrent requests. */
 			NMG_LOCK();
 			do {
+				struct nmreq_option *opt;
 				u_int memflags;
 #ifdef WITH_EXTMEM
-				struct nmreq_option *opt;
 #endif /* WITH_EXTMEM */
 
 				if (priv->np_nifp != NULL) {	/* thread already registered */
@@ -2387,6 +2485,23 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 				if (error) {    /* reg. failed, release priv and ref */
 					break;
 				}
+
+				opt = nmreq_findoption((struct nmreq_option *)(uintptr_t)hdr->nr_options,
+							NETMAP_REQ_OPT_CSB);
+				if (opt != NULL) {
+					struct nmreq_opt_csb *csbo =
+						(struct nmreq_opt_csb *)opt;
+					error = nmreq_checkduplicate(opt);
+					if (!error) {
+						error = netmap_csb_validate(priv, csbo);
+					}
+					opt->nro_status = error;
+					if (error) {
+						netmap_do_unregif(priv);
+						break;
+					}
+				}
+
 				nifp = priv->np_nifp;
 				priv->np_td = td; /* for debugging purposes */
 
@@ -2454,6 +2569,7 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 					 * so that we can call netmap_get_na(). */
 					struct nmreq_register regreq;
 					bzero(&regreq, sizeof(regreq));
+					regreq.nr_mode = NR_REG_ALL_NIC;
 					regreq.nr_tx_slots = req->nr_tx_slots;
 					regreq.nr_rx_slots = req->nr_rx_slots;
 					regreq.nr_tx_rings = req->nr_tx_rings;
@@ -2486,8 +2602,6 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 					break;
 				if (na == NULL) /* only memory info */
 					break;
-				req->nr_offset = 0;
-				req->nr_rx_slots = req->nr_tx_slots = 0;
 				netmap_update_config(na);
 				req->nr_rx_rings = na->num_rx_rings;
 				req->nr_tx_rings = na->num_tx_rings;
@@ -2521,6 +2635,8 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 			 * so that we can call netmap_get_bdg_na(). */
 			struct nmreq_register regreq;
 			bzero(&regreq, sizeof(regreq));
+			regreq.nr_mode = NR_REG_ALL_NIC;
+
 			/* For now we only support virtio-net headers, and only for
 			 * VALE ports, but this may change in future. Valid lengths
 			 * for the virtio-net header are 0 (no header), 10 and 12. */
@@ -2562,6 +2678,7 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 			struct ifnet *ifp;
 
 			bzero(&regreq, sizeof(regreq));
+			regreq.nr_mode = NR_REG_ALL_NIC;
 			NMG_LOCK();
 			hdr->nr_reqtype = NETMAP_REQ_REGISTER;
 			hdr->nr_body = (uintptr_t)&regreq;
@@ -2593,19 +2710,77 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 		}
 #endif  /* WITH_VALE */
 		case NETMAP_REQ_POOLS_INFO_GET: {
+			/* Get information from the memory allocator used for
+			 * hdr->nr_name. */
 			struct nmreq_pools_info *req =
 				(struct nmreq_pools_info *)(uintptr_t)hdr->nr_body;
-			/* Get information from the memory allocator. This
-			 * netmap device must already be bound to a port.
-			 * Note that hdr->nr_name is ignored. */
 			NMG_LOCK();
-			if (priv->np_na && priv->np_na->nm_mem) {
-				struct netmap_mem_d *nmd = priv->np_na->nm_mem;
+			do {
+				/* Build a nmreq_register out of the nmreq_pools_info,
+				 * so that we can call netmap_get_na(). */
+				struct nmreq_register regreq;
+				bzero(&regreq, sizeof(regreq));
+				regreq.nr_mem_id = req->nr_mem_id;
+				regreq.nr_mode = NR_REG_ALL_NIC;
+
+				hdr->nr_reqtype = NETMAP_REQ_REGISTER;
+				hdr->nr_body = (uintptr_t)&regreq;
+				error = netmap_get_na(hdr, &na, &ifp, NULL, 1 /* create */);
+				hdr->nr_reqtype = NETMAP_REQ_POOLS_INFO_GET; /* reset type */
+				hdr->nr_body = (uintptr_t)req; /* reset nr_body */
+				if (error) {
+					na = NULL;
+					ifp = NULL;
+					break;
+				}
+				nmd = na->nm_mem; /* grab the memory allocator */
+				if (nmd == NULL) {
+					error = EINVAL;
+					break;
+				}
+
+				/* Finalize the memory allocator, get the pools
+				 * information and release the allocator. */
+				error = netmap_mem_finalize(nmd, na);
+				if (error) {
+					break;
+				}
 				error = netmap_mem_pools_info_get(req, nmd);
-			} else {
-				error = EINVAL;
-			}
+				netmap_mem_drop(na);
+			} while (0);
+			netmap_unget_na(na, ifp);
 			NMG_UNLOCK();
+			break;
+		}
+
+		case NETMAP_REQ_CSB_ENABLE: {
+			struct nmreq_option *opt;
+
+			opt = nmreq_findoption((struct nmreq_option *)(uintptr_t)hdr->nr_options,
+						NETMAP_REQ_OPT_CSB);
+			if (opt == NULL) {
+				error = EINVAL;
+			} else {
+				struct nmreq_opt_csb *csbo =
+					(struct nmreq_opt_csb *)opt;
+				error = nmreq_checkduplicate(opt);
+				if (!error) {
+					NMG_LOCK();
+					error = netmap_csb_validate(priv, csbo);
+					NMG_UNLOCK();
+				}
+				opt->nro_status = error;
+			}
+			break;
+		}
+
+		case NETMAP_REQ_SYNC_KLOOP_START: {
+			error = netmap_sync_kloop(priv, hdr);
+			break;
+		}
+
+		case NETMAP_REQ_SYNC_KLOOP_STOP: {
+			error = netmap_sync_kloop_stop(priv);
 			break;
 		}
 
@@ -2622,19 +2797,19 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 
 	case NIOCTXSYNC:
 	case NIOCRXSYNC: {
-		if (priv->np_nifp == NULL) {
+		if (unlikely(priv->np_nifp == NULL)) {
 			error = ENXIO;
 			break;
 		}
 		mb(); /* make sure following reads are not from cache */
 
-		na = priv->np_na;      /* we have a reference */
-
-		if (na == NULL) {
-			D("Internal error: nifp != NULL && na == NULL");
-			error = ENXIO;
+		if (unlikely(priv->np_csb_atok_base)) {
+			nm_prerr("Invalid sync in CSB mode\n");
+			error = EBUSY;
 			break;
 		}
+
+		na = priv->np_na;      /* we have a reference */
 
 		mbq_init(&q);
 		t = (cmd == NIOCTXSYNC ? NR_TX : NR_RX);
@@ -2718,18 +2893,22 @@ nmreq_size_by_type(uint16_t nr_reqtype)
 	case NETMAP_REQ_VALE_NEWIF:
 		return sizeof(struct nmreq_vale_newif);
 	case NETMAP_REQ_VALE_DELIF:
+	case NETMAP_REQ_SYNC_KLOOP_STOP:
+	case NETMAP_REQ_CSB_ENABLE:
 		return 0;
 	case NETMAP_REQ_VALE_POLLING_ENABLE:
 	case NETMAP_REQ_VALE_POLLING_DISABLE:
 		return sizeof(struct nmreq_vale_polling);
 	case NETMAP_REQ_POOLS_INFO_GET:
 		return sizeof(struct nmreq_pools_info);
+	case NETMAP_REQ_SYNC_KLOOP_START:
+		return sizeof(struct nmreq_sync_kloop_start);
 	}
 	return 0;
 }
 
 static size_t
-nmreq_opt_size_by_type(uint16_t nro_reqtype)
+nmreq_opt_size_by_type(uint32_t nro_reqtype, uint64_t nro_size)
 {
 	size_t rv = sizeof(struct nmreq_option);
 #ifdef NETMAP_REQ_OPT_DEBUG
@@ -2742,6 +2921,13 @@ nmreq_opt_size_by_type(uint16_t nro_reqtype)
 		rv = sizeof(struct nmreq_opt_extmem);
 		break;
 #endif /* WITH_EXTMEM */
+	case NETMAP_REQ_OPT_SYNC_KLOOP_EVENTFDS:
+		if (nro_size >= rv)
+			rv = nro_size;
+		break;
+	case NETMAP_REQ_OPT_CSB:
+		rv = sizeof(struct nmreq_opt_csb);
+		break;
 	}
 	/* subtract the common header */
 	return rv - sizeof(struct nmreq_option);
@@ -2788,7 +2974,7 @@ nmreq_copyin(struct nmreq_header *hdr, int nr_body_is_user)
 		if (error)
 			goto out_err;
 		optsz += sizeof(*src);
-		optsz += nmreq_opt_size_by_type(buf.nro_reqtype);
+		optsz += nmreq_opt_size_by_type(buf.nro_reqtype, buf.nro_size);
 		if (rqsz + optsz > NETMAP_REQ_MAXSIZE) {
 			error = EMSGSIZE;
 			goto out_err;
@@ -2842,7 +3028,8 @@ nmreq_copyin(struct nmreq_header *hdr, int nr_body_is_user)
 		p = (char *)(opt + 1);
 
 		/* copy the option body */
-		optsz = nmreq_opt_size_by_type(opt->nro_reqtype);
+		optsz = nmreq_opt_size_by_type(opt->nro_reqtype,
+						opt->nro_size);
 		if (optsz) {
 			/* the option body follows the option header */
 			error = copyin(src + 1, p, optsz);
@@ -2916,7 +3103,8 @@ nmreq_copyout(struct nmreq_header *hdr, int rerror)
 
 		/* copy the option body only if there was no error */
 		if (!rerror && !src->nro_status) {
-			optsz = nmreq_opt_size_by_type(src->nro_reqtype);
+			optsz = nmreq_opt_size_by_type(src->nro_reqtype,
+							src->nro_size);
 			if (optsz) {
 				error = copyout(src + 1, dst + 1, optsz);
 				if (error) {
@@ -3018,16 +3206,20 @@ netmap_poll(struct netmap_priv_d *priv, int events, NM_SELRECORD_T *sr)
 
 	mbq_init(&q);
 
-	if (priv->np_nifp == NULL) {
-		D("No if registered");
+	if (unlikely(priv->np_nifp == NULL)) {
 		return POLLERR;
 	}
 	mb(); /* make sure following reads are not from cache */
 
 	na = priv->np_na;
 
-	if (!nm_netmap_on(na))
+	if (unlikely(!nm_netmap_on(na)))
 		return POLLERR;
+
+	if (unlikely(priv->np_csb_atok_base)) {
+		nm_prerr("Invalid poll in CSB mode\n");
+		return POLLERR;
+	}
 
 	if (netmap_verbose & 0x8000)
 		D("device %s events 0x%x", na->name, events);
@@ -3867,7 +4059,6 @@ nm_clear_native_flags(struct netmap_adapter *na)
 
 	na->na_flags &= ~NAF_NETMAP_ON;
 }
-
 
 /*
  * Module loader and unloader

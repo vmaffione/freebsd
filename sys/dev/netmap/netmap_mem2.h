@@ -156,6 +156,15 @@ struct netmap_mem_d* netmap_mem_ext_create(uint64_t, struct nmreq_pools_info *, 
 	({ int *perr = _perr; if (perr) *(perr) = EOPNOTSUPP; NULL; })
 #endif /* WITH_EXTMEM */
 
+#ifdef WITH_PTNETMAP
+struct netmap_mem_d* netmap_mem_pt_guest_new(struct ifnet *,
+					     unsigned int nifp_offset,
+					     unsigned int memid);
+struct ptnetmap_memdev;
+struct netmap_mem_d* netmap_mem_pt_guest_attach(struct ptnetmap_memdev *, uint16_t);
+int netmap_mem_pt_guest_ifp_del(struct netmap_mem_d *, struct ifnet *);
+#endif /* WITH_PTNETMAP */
+
 int netmap_mem_pools_info_get(struct nmreq_pools_info *,
 				struct netmap_mem_d *);
 
@@ -166,6 +175,7 @@ int netmap_mem_pools_info_get(struct nmreq_pools_info *,
 uint32_t netmap_extra_alloc(struct netmap_adapter *, uint32_t *, uint32_t n);
 
 #ifdef WITH_EXTMEM
+#include <net/netmap_virt.h>
 struct nm_os_extmem; /* opaque */
 struct nm_os_extmem *nm_os_extmem_create(unsigned long, struct nmreq_pools_info *, int *perror);
 char *nm_os_extmem_nextpage(struct nm_os_extmem *);

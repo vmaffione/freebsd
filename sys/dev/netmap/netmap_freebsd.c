@@ -67,6 +67,7 @@
 
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
+#include <net/netmap_virt.h>
 #include <dev/netmap/netmap_mem2.h>
 
 
@@ -732,6 +733,205 @@ out:
 }
 #endif /* WITH_EXTMEM */
 
+/* ================== PTNETMAP GUEST SUPPORT ==================== */
+
+#ifdef WITH_PTNETMAP
+#include <sys/bus.h>
+#include <sys/rman.h>
+#include <machine/bus.h>        /* bus_dmamap_* */
+#include <machine/resource.h>
+#include <dev/pci/pcivar.h>
+#include <dev/pci/pcireg.h>
+/*
+ * ptnetmap memory device (memdev) for freebsd guest,
+ * ssed to expose host netmap memory to the guest through a PCI BAR.
+ */
+
+/*
+ * ptnetmap memdev private data structure
+ */
+struct ptnetmap_memdev {
+	device_t dev;
+	struct resource *pci_io;
+	struct resource *pci_mem;
+	struct netmap_mem_d *nm_mem;
+};
+
+static int	ptn_memdev_probe(device_t);
+static int	ptn_memdev_attach(device_t);
+static int	ptn_memdev_detach(device_t);
+static int	ptn_memdev_shutdown(device_t);
+
+static device_method_t ptn_memdev_methods[] = {
+	DEVMETHOD(device_probe, ptn_memdev_probe),
+	DEVMETHOD(device_attach, ptn_memdev_attach),
+	DEVMETHOD(device_detach, ptn_memdev_detach),
+	DEVMETHOD(device_shutdown, ptn_memdev_shutdown),
+	DEVMETHOD_END
+};
+
+static driver_t ptn_memdev_driver = {
+	PTNETMAP_MEMDEV_NAME,
+	ptn_memdev_methods,
+	sizeof(struct ptnetmap_memdev),
+};
+
+/* We use (SI_ORDER_MIDDLE+1) here, see DEV_MODULE_ORDERED() invocation
+ * below. */
+static devclass_t ptnetmap_devclass;
+DRIVER_MODULE_ORDERED(ptn_memdev, pci, ptn_memdev_driver, ptnetmap_devclass,
+		      NULL, NULL, SI_ORDER_MIDDLE + 1);
+
+/*
+ * Map host netmap memory through PCI-BAR in the guest OS,
+ * returning physical (nm_paddr) and virtual (nm_addr) addresses
+ * of the netmap memory mapped in the guest.
+ */
+int
+nm_os_pt_memdev_iomap(struct ptnetmap_memdev *ptn_dev, vm_paddr_t *nm_paddr,
+		      void **nm_addr, uint64_t *mem_size)
+{
+	int rid;
+
+	D("ptn_memdev_driver iomap");
+
+	rid = PCIR_BAR(PTNETMAP_MEM_PCI_BAR);
+	*mem_size = bus_read_4(ptn_dev->pci_io, PTNET_MDEV_IO_MEMSIZE_HI);
+	*mem_size = bus_read_4(ptn_dev->pci_io, PTNET_MDEV_IO_MEMSIZE_LO) |
+			(*mem_size << 32);
+
+	/* map memory allocator */
+	ptn_dev->pci_mem = bus_alloc_resource(ptn_dev->dev, SYS_RES_MEMORY,
+			&rid, 0, ~0, *mem_size, RF_ACTIVE);
+	if (ptn_dev->pci_mem == NULL) {
+		*nm_paddr = 0;
+		*nm_addr = NULL;
+		return ENOMEM;
+	}
+
+	*nm_paddr = rman_get_start(ptn_dev->pci_mem);
+	*nm_addr = rman_get_virtual(ptn_dev->pci_mem);
+
+	D("=== BAR %d start %lx len %lx mem_size %lx ===",
+			PTNETMAP_MEM_PCI_BAR,
+			(unsigned long)(*nm_paddr),
+			(unsigned long)rman_get_size(ptn_dev->pci_mem),
+			(unsigned long)*mem_size);
+	return (0);
+}
+
+uint32_t
+nm_os_pt_memdev_ioread(struct ptnetmap_memdev *ptn_dev, unsigned int reg)
+{
+	return bus_read_4(ptn_dev->pci_io, reg);
+}
+
+/* Unmap host netmap memory. */
+void
+nm_os_pt_memdev_iounmap(struct ptnetmap_memdev *ptn_dev)
+{
+	D("ptn_memdev_driver iounmap");
+
+	if (ptn_dev->pci_mem) {
+		bus_release_resource(ptn_dev->dev, SYS_RES_MEMORY,
+			PCIR_BAR(PTNETMAP_MEM_PCI_BAR), ptn_dev->pci_mem);
+		ptn_dev->pci_mem = NULL;
+	}
+}
+
+/* Device identification routine, return BUS_PROBE_DEFAULT on success,
+ * positive on failure */
+static int
+ptn_memdev_probe(device_t dev)
+{
+	char desc[256];
+
+	if (pci_get_vendor(dev) != PTNETMAP_PCI_VENDOR_ID)
+		return (ENXIO);
+	if (pci_get_device(dev) != PTNETMAP_PCI_DEVICE_ID)
+		return (ENXIO);
+
+	snprintf(desc, sizeof(desc), "%s PCI adapter",
+			PTNETMAP_MEMDEV_NAME);
+	device_set_desc_copy(dev, desc);
+
+	return (BUS_PROBE_DEFAULT);
+}
+
+/* Device initialization routine. */
+static int
+ptn_memdev_attach(device_t dev)
+{
+	struct ptnetmap_memdev *ptn_dev;
+	int rid;
+	uint16_t mem_id;
+
+	D("ptn_memdev_driver attach");
+
+	ptn_dev = device_get_softc(dev);
+	ptn_dev->dev = dev;
+
+	pci_enable_busmaster(dev);
+
+	rid = PCIR_BAR(PTNETMAP_IO_PCI_BAR);
+	ptn_dev->pci_io = bus_alloc_resource_any(dev, SYS_RES_IOPORT, &rid,
+						 RF_ACTIVE);
+	if (ptn_dev->pci_io == NULL) {
+	        device_printf(dev, "cannot map I/O space\n");
+	        return (ENXIO);
+	}
+
+	mem_id = bus_read_4(ptn_dev->pci_io, PTNET_MDEV_IO_MEMID);
+
+	/* create guest allocator */
+	ptn_dev->nm_mem = netmap_mem_pt_guest_attach(ptn_dev, mem_id);
+	if (ptn_dev->nm_mem == NULL) {
+		ptn_memdev_detach(dev);
+	        return (ENOMEM);
+	}
+	netmap_mem_get(ptn_dev->nm_mem);
+
+	D("ptn_memdev_driver probe OK - host_mem_id: %d", mem_id);
+
+	return (0);
+}
+
+/* Device removal routine. */
+static int
+ptn_memdev_detach(device_t dev)
+{
+	struct ptnetmap_memdev *ptn_dev;
+
+	D("ptn_memdev_driver detach");
+	ptn_dev = device_get_softc(dev);
+
+	if (ptn_dev->nm_mem) {
+		netmap_mem_put(ptn_dev->nm_mem);
+		ptn_dev->nm_mem = NULL;
+	}
+	if (ptn_dev->pci_mem) {
+		bus_release_resource(dev, SYS_RES_MEMORY,
+			PCIR_BAR(PTNETMAP_MEM_PCI_BAR), ptn_dev->pci_mem);
+		ptn_dev->pci_mem = NULL;
+	}
+	if (ptn_dev->pci_io) {
+		bus_release_resource(dev, SYS_RES_IOPORT,
+			PCIR_BAR(PTNETMAP_IO_PCI_BAR), ptn_dev->pci_io);
+		ptn_dev->pci_io = NULL;
+	}
+
+	return (0);
+}
+
+static int
+ptn_memdev_shutdown(device_t dev)
+{
+	D("ptn_memdev_driver shutdown");
+	return bus_generic_shutdown(dev);
+}
+
+#endif /* WITH_PTNETMAP */
+
 /*
  * In order to track whether pages are still mapped, we hook into
  * the standard cdev_pager and intercept the constructor and
@@ -943,7 +1143,8 @@ nm_os_ncpus(void)
 }
 
 struct nm_kctx_ctx {
-	struct thread *user_td;		/* thread user-space (kthread creator) to send ioctl */
+	/* Userspace thread (kthread creator). */
+	struct thread *user_td;
 
 	/* worker function and parameter */
 	nm_kctx_worker_fn_t worker_fn;
@@ -963,18 +1164,6 @@ struct nm_kctx {
 	int attach_user;		/* kthread attached to user_process */
 	int affinity;
 };
-
-void inline
-nm_os_kctx_worker_wakeup(struct nm_kctx *nmk)
-{
-	(void) nmk;
-}
-
-void inline
-nm_os_kctx_send_irq(struct nm_kctx *nmk)
-{
-	(void) nmk;
-}
 
 static void
 nm_kctx_worker(void *data)
@@ -1001,7 +1190,8 @@ nm_kctx_worker(void *data)
 			kthread_suspend_check();
 		}
 
-		ctx->worker_fn(ctx->worker_private, 1); /* worker body */
+		/* Continuously execute worker process. */
+		ctx->worker_fn(ctx->worker_private); /* worker body */
 	}
 
 	kthread_exit();
@@ -1045,9 +1235,8 @@ nm_os_kctx_worker_start(struct nm_kctx *nmk)
 	 * the "vale_polling_enable_disable" test in ctrl-api-test.c. */
 	return EOPNOTSUPP;
 
-	if (nmk->worker) {
+	if (nmk->worker)
 		return EBUSY;
-	}
 
 	/* check if we want to attach kthread to user process */
 	if (nmk->attach_user) {
@@ -1076,15 +1265,14 @@ err:
 void
 nm_os_kctx_worker_stop(struct nm_kctx *nmk)
 {
-	if (!nmk->worker) {
+	if (!nmk->worker)
 		return;
-	}
+
 	/* tell to kthread to exit from main loop */
 	nmk->run = 0;
 
 	/* wake up kthread if it sleeps */
 	kthread_resume(nmk->worker);
-	nm_os_kctx_worker_wakeup(nmk);
 
 	nmk->worker = NULL;
 }
@@ -1094,9 +1282,9 @@ nm_os_kctx_destroy(struct nm_kctx *nmk)
 {
 	if (!nmk)
 		return;
-	if (nmk->worker) {
+
+	if (nmk->worker)
 		nm_os_kctx_worker_stop(nmk);
-	}
 
 	free(nmk, M_DEVBUF);
 }

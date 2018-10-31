@@ -569,7 +569,7 @@ struct nm_bdg_polling_state {
 };
 
 static void
-netmap_bwrap_polling(void *data, int is_kthread)
+netmap_bwrap_polling(void *data)
 {
 	struct nm_bdg_kthread *nbk = data;
 	struct netmap_bwrap_adapter *bna;
@@ -601,7 +601,6 @@ nm_bdg_create_kthreads(struct nm_bdg_polling_state *bps)
 
 	bzero(&kcfg, sizeof(kcfg));
 	kcfg.worker_fn = netmap_bwrap_polling;
-	kcfg.use_kthread = 1;
 	for (i = 0; i < bps->ncpus; i++) {
 		struct nm_bdg_kthread *t = bps->kthreads + i;
 		int all = (bps->ncpus == 1 &&
@@ -1591,6 +1590,8 @@ netmap_bwrap_attach_common(struct netmap_adapter *na,
 		hostna->na_flags = NAF_BUSY; /* prevent NIOCREGIF */
 		hostna->rx_buf_maxsize = hwna->rx_buf_maxsize;
 	}
+	if (hwna->na_flags & NAF_MOREFRAG)
+		na->na_flags |= NAF_MOREFRAG;
 
 	ND("%s<->%s txr %d txd %d rxr %d rxd %d",
 		na->name, ifp->if_xname,

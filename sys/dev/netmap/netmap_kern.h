@@ -52,6 +52,9 @@
 #if defined(CONFIG_NETMAP_GENERIC)
 #define WITH_GENERIC
 #endif
+#if defined(CONFIG_NETMAP_PTNETMAP)
+#define WITH_PTNETMAP
+#endif
 #if defined(CONFIG_NETMAP_SINK)
 #define WITH_SINK
 #endif
@@ -67,6 +70,7 @@
 #define WITH_PIPES
 #define WITH_MONITOR
 #define WITH_GENERIC
+#define WITH_PTNETMAP	/* ptnetmap guest support */
 #define WITH_EXTMEM
 #endif
 
@@ -690,6 +694,7 @@ struct netmap_adapter {
 				 */
 #define NAF_HOST_RINGS  64	/* the adapter supports the host rings */
 #define NAF_FORCE_NATIVE 128	/* the adapter is always NATIVE */
+/* free */
 #define NAF_MOREFRAG	512	/* the adapter supports NS_MOREFRAG */
 #define NAF_ZOMBIE	(1U<<30) /* the nic driver has been unloaded */
 #define	NAF_BUSY	(1U<<31) /* the adapter is used internally and
@@ -1431,7 +1436,6 @@ void netmap_unget_na(struct netmap_adapter *na, struct ifnet *ifp);
 int netmap_get_hw_na(struct ifnet *ifp,
 		struct netmap_mem_d *nmd, struct netmap_adapter **na);
 
-
 #ifdef WITH_VALE
 uint32_t netmap_vale_learning(struct nm_bdg_fwd *ft, uint8_t *dst_ring,
 		struct netmap_vp_adapter *, void *private_data);
@@ -1560,7 +1564,6 @@ extern int netmap_generic_rings;
 #ifdef linux
 extern int netmap_generic_txqdisc;
 #endif
-extern int ptnetmap_tx_workers;
 
 /*
  * NA returns a pointer to the struct netmap adapter from the ifp.
@@ -1859,6 +1862,9 @@ struct netmap_priv_d {
 	u_int		np_qfirst[NR_TXRX],
 			np_qlast[NR_TXRX]; /* range of tx/rx rings to scan */
 	uint16_t	np_txpoll;
+	uint16_t        np_kloop_state;	/* use with NMG_LOCK held */
+#define NM_SYNC_KLOOP_RUNNING	(1 << 0)
+#define NM_SYNC_KLOOP_STOPPING	(1 << 1)
 	int             np_sync_flags; /* to be passed to nm_sync */
 
 	int		np_refs;	/* use with NMG_LOCK held */
@@ -1868,7 +1874,26 @@ struct netmap_priv_d {
 	 * number of rings.
 	 */
 	NM_SELINFO_T *np_si[NR_TXRX];
+
+	/* In the optional CSB mode, the user must specify the start address
+	 * of two arrays of Communication Status Block (CSB) entries, for the
+	 * two directions (kernel read application write, and kernel write
+	 * application read).
+	 * The number of entries must agree with the number of rings bound to
+	 * the netmap file descriptor. The entries corresponding to the TX
+	 * rings are laid out before the ones corresponding to the RX rings.
+	 *
+	 * Array of CSB entries for application --> kernel communication
+	 * (N entries). */
+	struct nm_csb_atok	*np_csb_atok_base;
+	/* Array of CSB entries for kernel --> application communication
+	 * (N entries). */
+	struct nm_csb_ktoa	*np_csb_ktoa_base;
+
 	struct thread	*np_td;		/* kqueue, just debugging */
+#ifdef linux
+	struct file	*np_filp;  /* used by sync kloop */
+#endif /* linux */
 };
 
 struct netmap_priv_d *netmap_priv_new(void);
@@ -1889,6 +1914,14 @@ static inline int nm_kring_pending(struct netmap_priv_d *np)
 		}
 	}
 	return 0;
+}
+
+/* call with NMG_LOCK held */
+static __inline int
+nm_si_user(struct netmap_priv_d *priv, enum txrx t)
+{
+	return (priv->np_na != NULL &&
+		(priv->np_qlast[t] - priv->np_qfirst[t] > 1));
 }
 
 #ifdef WITH_PIPES
@@ -2091,17 +2124,14 @@ void nm_os_vi_init_index(void);
  * kernel thread routines
  */
 struct nm_kctx; /* OS-specific kernel context - opaque */
-typedef void (*nm_kctx_worker_fn_t)(void *data, int is_kthread);
-typedef void (*nm_kctx_notify_fn_t)(void *data);
+typedef void (*nm_kctx_worker_fn_t)(void *data);
 
 /* kthread configuration */
 struct nm_kctx_cfg {
 	long			type;		/* kthread type/identifier */
 	nm_kctx_worker_fn_t	worker_fn;	/* worker function */
 	void			*worker_private;/* worker parameter */
-	nm_kctx_notify_fn_t	notify_fn;	/* notify function */
 	int			attach_user;	/* attach kthread to user process */
-	int			use_kthread;	/* use a kthread for the context */
 };
 /* kthread configuration */
 struct nm_kctx *nm_os_kctx_create(struct nm_kctx_cfg *cfg,
@@ -2109,10 +2139,117 @@ struct nm_kctx *nm_os_kctx_create(struct nm_kctx_cfg *cfg,
 int nm_os_kctx_worker_start(struct nm_kctx *);
 void nm_os_kctx_worker_stop(struct nm_kctx *);
 void nm_os_kctx_destroy(struct nm_kctx *);
-void nm_os_kctx_worker_wakeup(struct nm_kctx *nmk);
-void nm_os_kctx_send_irq(struct nm_kctx *);
 void nm_os_kctx_worker_setaff(struct nm_kctx *, int);
 u_int nm_os_ncpus(void);
+
+int netmap_sync_kloop(struct netmap_priv_d *priv,
+		      struct nmreq_header *hdr);
+int netmap_sync_kloop_stop(struct netmap_priv_d *priv);
+
+#ifdef WITH_PTNETMAP
+/* ptnetmap guest routines */
+
+/*
+ * ptnetmap_memdev routines used to talk with ptnetmap_memdev device driver
+ */
+struct ptnetmap_memdev;
+int nm_os_pt_memdev_iomap(struct ptnetmap_memdev *, vm_paddr_t *, void **,
+                          uint64_t *);
+void nm_os_pt_memdev_iounmap(struct ptnetmap_memdev *);
+uint32_t nm_os_pt_memdev_ioread(struct ptnetmap_memdev *, unsigned int);
+
+/*
+ * netmap adapter for guest ptnetmap ports
+ */
+struct netmap_pt_guest_adapter {
+        /* The netmap adapter to be used by netmap applications.
+	 * This field must be the first, to allow upcast. */
+	struct netmap_hw_adapter hwup;
+
+        /* The netmap adapter to be used by the driver. */
+        struct netmap_hw_adapter dr;
+
+	/* Reference counter to track users of backend netmap port: the
+	 * network stack and netmap clients.
+	 * Used to decide when we need (de)allocate krings/rings and
+	 * start (stop) ptnetmap kthreads. */
+	int backend_users;
+
+};
+
+int netmap_pt_guest_attach(struct netmap_adapter *na,
+			unsigned int nifp_offset,
+			unsigned int memid);
+bool netmap_pt_guest_txsync(struct nm_csb_atok *atok,
+			struct nm_csb_ktoa *ktoa,
+			struct netmap_kring *kring, int flags);
+bool netmap_pt_guest_rxsync(struct nm_csb_atok *atok,
+			struct nm_csb_ktoa *ktoa,
+			struct netmap_kring *kring, int flags);
+int ptnet_nm_krings_create(struct netmap_adapter *na);
+void ptnet_nm_krings_delete(struct netmap_adapter *na);
+void ptnet_nm_dtor(struct netmap_adapter *na);
+
+/* Guest driver: Write kring pointers (cur, head) to the CSB.
+ * This routine is coupled with ptnetmap_host_read_kring_csb(). */
+static inline void
+ptnetmap_guest_write_kring_csb(struct nm_csb_atok *atok, uint32_t cur,
+			       uint32_t head)
+{
+    /*
+     * We need to write cur and head to the CSB but we cannot do it atomically.
+     * There is no way we can prevent the host from reading the updated value
+     * of one of the two and the old value of the other. However, if we make
+     * sure that the host never reads a value of head more recent than the
+     * value of cur we are safe. We can allow the host to read a value of cur
+     * more recent than the value of head, since in the netmap ring cur can be
+     * ahead of head and cur cannot wrap around head because it must be behind
+     * tail. Inverting the order of writes below could instead result into the
+     * host to think head went ahead of cur, which would cause the sync
+     * prologue to fail.
+     *
+     * The following memory barrier scheme is used to make this happen:
+     *
+     *          Guest              Host
+     *
+     *          STORE(cur)         LOAD(head)
+     *          mb() <-----------> mb()
+     *          STORE(head)        LOAD(cur)
+     */
+    atok->cur = cur;
+    nm_stst_barrier();
+    atok->head = head;
+}
+
+/* Guest driver: Read kring pointers (hwcur, hwtail) from the CSB.
+ * This routine is coupled with ptnetmap_host_write_kring_csb(). */
+static inline void
+ptnetmap_guest_read_kring_csb(struct nm_csb_ktoa *ktoa,
+                              struct netmap_kring *kring)
+{
+    /*
+     * We place a memory barrier to make sure that the update of hwtail never
+     * overtakes the update of hwcur.
+     * (see explanation in ptnetmap_host_write_kring_csb).
+     */
+    kring->nr_hwtail = ktoa->hwtail;
+    nm_stst_barrier();
+    kring->nr_hwcur = ktoa->hwcur;
+}
+
+/* Helper function wrapping ptnetmap_guest_read_kring_csb(). */
+static inline void
+ptnet_sync_tail(struct nm_csb_ktoa *ktoa, struct netmap_kring *kring)
+{
+	struct netmap_ring *ring = kring->ring;
+
+	/* Update hwcur and hwtail as known by the host. */
+        ptnetmap_guest_read_kring_csb(ktoa, kring);
+
+	/* nm_sync_finalize */
+	ring->tail = kring->rtail = kring->nr_hwtail;
+}
+#endif /* WITH_PTNETMAP */
 
 #ifdef __FreeBSD__
 /*
@@ -2232,5 +2369,14 @@ int nmreq_checkduplicate(struct nmreq_option *);
 
 int netmap_init_bridges(void);
 void netmap_uninit_bridges(void);
+
+/* Functions to read and write CSB fields from the kernel. */
+#if defined (linux)
+#define CSB_READ(csb, field, r) (get_user(r, &csb->field))
+#define CSB_WRITE(csb, field, v) (put_user(v, &csb->field))
+#else  /* ! linux */
+#define CSB_READ(csb, field, r) (r = fuword32(&csb->field))
+#define CSB_WRITE(csb, field, v) (suword32(&csb->field, v))
+#endif /* ! linux */
 
 #endif /* _NET_NETMAP_KERN_H_ */
