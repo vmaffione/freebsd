@@ -34,8 +34,6 @@
 #include <dev/netmap/netmap_kern.h>
 
 
-#define SOFTC_T	vtnet_softc
-
 /* Free all the unused buffer in all the RX virtqueues.
  * This function is called when entering and exiting netmap mode.
  * - buffers queued by the virtio driver return skbuf/mbuf pointer
@@ -43,7 +41,7 @@
  * - buffers queued by netmap return the txq/rxq, and do not need work
  */
 static void
-vtnet_netmap_free_bufs(struct SOFTC_T* sc)
+vtnet_netmap_free_bufs(struct vtnet_softc* sc)
 {
 	int i, nmb = 0, n = 0, last;
 
@@ -84,7 +82,7 @@ static int
 vtnet_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
-	struct SOFTC_T *sc = ifp->if_softc;
+	struct vtnet_softc *sc = ifp->if_softc;
 
 	VTNET_CORE_LOCK(sc);
 	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
@@ -119,7 +117,7 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 	u_int const head = kring->rhead;
 
 	/* device-specific */
-	struct SOFTC_T *sc = ifp->if_softc;
+	struct vtnet_softc *sc = ifp->if_softc;
 	struct vtnet_txq *txq = &sc->vtnet_txqs[ring_nr];
 	struct virtqueue *vq = txq->vtntx_vq;
 	int interrupts = !(kring->nr_kflags & NKR_NOINTR);
@@ -231,7 +229,7 @@ vtnet_refill_rxq(struct netmap_kring *kring, u_int nm_i, u_int head)
 	u_int n;
 
 	/* device-specific */
-	struct SOFTC_T *sc = ifp->if_softc;
+	struct vtnet_softc *sc = ifp->if_softc;
 	struct vtnet_rxq *rxq = &sc->vtnet_rxqs[ring_nr];
 	struct virtqueue *vq = rxq->vtnrx_vq;
 
@@ -283,7 +281,7 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 	int interrupts = !(kring->nr_kflags & NKR_NOINTR);
 
 	/* device-specific */
-	struct SOFTC_T *sc = ifp->if_softc;
+	struct vtnet_softc *sc = ifp->if_softc;
 	struct vtnet_rxq *rxq = &sc->vtnet_rxqs[ring_nr];
 	struct virtqueue *vq = rxq->vtnrx_vq;
 
@@ -354,7 +352,7 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 static void
 vtnet_netmap_intr(struct netmap_adapter *na, int onoff)
 {
-	struct SOFTC_T *sc = na->ifp->if_softc;
+	struct vtnet_softc *sc = na->ifp->if_softc;
 	int i;
 
 	for (i = 0; i < sc->vtnet_max_vq_pairs; i++) {
@@ -374,7 +372,7 @@ vtnet_netmap_intr(struct netmap_adapter *na, int onoff)
 
 /* Make RX virtqueues buffers pointing to netmap buffers. */
 static int
-vtnet_netmap_init_rx_buffers(struct SOFTC_T *sc)
+vtnet_netmap_init_rx_buffers(struct vtnet_softc *sc)
 {
 	struct ifnet *ifp = sc->vtnet_ifp;
 	struct netmap_adapter* na = NA(ifp);
@@ -408,24 +406,24 @@ vtnet_netmap_init_rx_buffers(struct SOFTC_T *sc)
 }
 
 static void
-vtnet_netmap_attach(struct SOFTC_T *sc)
+vtnet_netmap_attach(struct vtnet_softc *sc)
 {
 	struct netmap_adapter na;
 
 	bzero(&na, sizeof(na));
 
 	na.ifp = sc->vtnet_ifp;
-	na.num_tx_desc =  1024;// sc->vtnet_rx_nmbufs;
-	na.num_rx_desc =  1024; // sc->vtnet_rx_nmbufs;
+	na.num_tx_desc = virtqueue_size(sc->vtnet_txqs[0].vtntx_vq);
+	na.num_rx_desc = virtqueue_size(sc->vtnet_rxqs[0].vtnrx_vq);
+	na.num_tx_rings = na.num_rx_rings = sc->vtnet_max_vq_pairs;
+	na.rx_buf_maxsize = 0;
 	na.nm_register = vtnet_netmap_reg;
 	na.nm_txsync = vtnet_netmap_txsync;
 	na.nm_rxsync = vtnet_netmap_rxsync;
 	na.nm_intr = vtnet_netmap_intr;
-	na.num_tx_rings = na.num_rx_rings = sc->vtnet_max_vq_pairs;
-	D("max rings %d", sc->vtnet_max_vq_pairs);
 	netmap_attach(&na);
 
-        D("virtio attached txq=%d, txd=%d rxq=%d, rxd=%d",
+        nm_prinf("vtnet attached txq=%d, txd=%d rxq=%d, rxd=%d\n",
 			na.num_tx_rings, na.num_tx_desc,
 			na.num_tx_rings, na.num_rx_desc);
 }
