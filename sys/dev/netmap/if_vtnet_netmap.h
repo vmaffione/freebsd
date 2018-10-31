@@ -177,7 +177,7 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
                 if (token == NULL)
                         break;
 		if (unlikely(token != (void *)txq))
-			nm_prerr("BUG: token mismatch!!\n");
+			nm_prerr("BUG: TX token mismatch!\n");
 		else
 			n++;
         }
@@ -201,7 +201,6 @@ vtnet_refill_rxq(struct netmap_kring *kring, u_int nm_i, u_int head)
 	struct netmap_ring *ring = kring->ring;
 	u_int ring_nr = kring->ring_id;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int n;
 
 	/* device-specific */
 	struct vtnet_softc *sc = ifp->if_softc;
@@ -212,8 +211,7 @@ vtnet_refill_rxq(struct netmap_kring *kring, u_int nm_i, u_int head)
 	struct sglist_seg ss[2];
 	struct sglist sg = { ss, 0, 0, 2 };
 
-	for (n = 0; nm_i != head; n++) {
-		static struct virtio_net_hdr_mrg_rxbuf hdr;
+	for (; nm_i != head; nm_i = nm_next(nm_i, lim)) {
 		struct netmap_slot *slot = &ring->slot[nm_i];
 		uint64_t paddr;
 		void *addr = PNMB(na, slot, &paddr);
@@ -225,17 +223,18 @@ vtnet_refill_rxq(struct netmap_kring *kring, u_int nm_i, u_int head)
 		}
 
 		slot->flags &= ~NS_BUF_CHANGED;
-		sglist_reset(&sg); // cheap
-		err = sglist_append(&sg, &hdr, sc->vtnet_hdr_size);
+		sglist_reset(&sg);
+		err = sglist_append(&sg, &rxq->vtnrx_shrhdr, sc->vtnet_hdr_size);
 		err = sglist_append_phys(&sg, paddr, NETMAP_BUF_SIZE(na));
 		/* writable for the host */
-		err = virtqueue_enqueue(vq, rxq, &sg, 0, sg.sg_nseg);
+		err = virtqueue_enqueue(vq, /*cookie=*/rxq, &sg,
+				/*readable=*/0, /*writeable=*/sg.sg_nseg);
 		if (err < 0) {
 			D("virtqueue_enqueue failed");
 			break;
 		}
-		nm_i = nm_next(nm_i, lim);
 	}
+
 	return nm_i;
 }
 
@@ -252,7 +251,8 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
-	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
+	int force_update = (flags & NAF_FORCE_READ) ||
+				(kring->nr_kflags & NKR_PENDINTR);
 	int interrupts = !(kring->nr_kflags & NKR_NOINTR);
 
 	/* device-specific */
@@ -260,36 +260,41 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 	struct vtnet_rxq *rxq = &sc->vtnet_rxqs[ring_nr];
 	struct virtqueue *vq = rxq->vtnrx_vq;
 
-	/* XXX netif_carrier_ok ? */
-
-	if (head > lim)
-		return netmap_ring_reinit(kring);
+	vtnet_rxq_disable_intr(rxq);
 
 	rmb();
 	/*
 	 * First part: import newly received packets.
-	 * Only accept our
-	 * own buffers (matching the token). We should only get
+	 * Only accept our own buffers (matching the token). We should only get
 	 * matching buffers, because of vtnet_netmap_free_rx_unused_bufs()
-	 * and vtnet_netmap_init_buffers().
+	 * and vtnet_netmap_init_buffers(). We may need to stop early to avoid
+	 * hwtail to overrun hwcur.
 	 */
 	if (netmap_no_pendintr || force_update) {
-                struct netmap_adapter *token;
+		uint32_t hwtail_lim = nm_prev(kring->nr_hwcur, lim);
+                void *token;
 
                 nm_i = kring->nr_hwtail;
                 n = 0;
-		for (;;) {
+		while (nm_i != hwtail_lim) {
 			int len;
                         token = virtqueue_dequeue(vq, &len);
                         if (token == NULL)
                                 break;
-                        if (likely(token == (void *)rxq)) {
-                            ring->slot[nm_i].len = len;
-                            ring->slot[nm_i].flags = 0;
-                            nm_i = nm_next(nm_i, lim);
-                            n++;
-                        } else {
-			    D("This should not happen");
+			if (unlikely(token != (void *)rxq)) {
+				nm_prerr("BUG: RX token mismatch!\n");
+			} else {
+				/* Skip the virtio-net header. */
+				len -= sc->vtnet_hdr_size;
+				if (unlikely(len < 0)) {
+					RD(1, "Truncated virtio-net-header, "
+						"missing %d bytes", -len)
+					len = 0;
+				}
+				ring->slot[nm_i].len = len;
+				ring->slot[nm_i].flags = 0;
+				nm_i = nm_next(nm_i, lim);
+				n++;
                         }
 		}
 		kring->nr_hwtail = nm_i;
@@ -304,15 +309,18 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 	 */
 	nm_i = kring->nr_hwcur; /* netmap ring index */
 	if (nm_i != head) {
-		int err = vtnet_refill_rxq(kring, nm_i, head);
-		if (err < 0)
-			return 1;
-		kring->nr_hwcur = err;
+		int nm_j = vtnet_refill_rxq(kring, nm_i, head);
+		if (nm_j < 0)
+			return nm_j;
+		kring->nr_hwcur = nm_j;
 		virtqueue_notify(vq);
-		/* After draining the queue may need an intr from the hypervisor */
-		if (interrupts) {
-			vtnet_rxq_enable_intr(rxq);
-		}
+	}
+
+	/* We have finished processing used RX buffers, so we have to tell
+	 * the hypervisor to make a call when more used RX buffers are ready.
+	 */
+	if (interrupts) {
+		vtnet_rxq_enable_intr(rxq);
 	}
 
         ND("[C] h %d c %d t %d hwcur %d hwtail %d",
