@@ -111,7 +111,7 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int ring_nr = kring->ring_id;
 	u_int nm_i;	/* index into the netmap ring */
-	u_int nic_i;	/* index into the NIC ring */
+	//u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
@@ -131,7 +131,7 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 	if (nm_i != head) {	/* we have new packets to send */
 		struct sglist *sg = txq->vtntx_sg;
 
-		nic_i = netmap_idx_k2n(kring, nm_i);
+		//nic_i = netmap_idx_k2n(kring, nm_i);
 		for (n = 0; nm_i != head; n++) {
 			/* we use an empty header here */
 			static struct virtio_net_hdr_mrg_rxbuf hdr;
@@ -148,72 +148,46 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 			 * and kick the hypervisor (if necessary).
 			 */
 			sglist_reset(sg); // cheap
-			// if vtnet_hdr_size > 0 ...
 			err = sglist_append(sg, &hdr, sc->vtnet_hdr_size);
-			// XXX later, support multi segment
 			err = sglist_append_phys(sg, paddr, len);
 			/* use na as the cookie */
                         err = virtqueue_enqueue(vq, txq, sg, sg->sg_nseg, 0);
                         if (unlikely(err < 0)) {
-                                D("virtqueue_enqueue failed");
+                                nm_prerr("virtqueue_enqueue() failed: %d\n", err);
                                 break;
                         }
 
 			nm_i = nm_next(nm_i, lim);
-			nic_i = nm_next(nic_i, lim);
+			//nic_i = nm_next(nic_i, lim);
 		}
+
+		virtqueue_notify(vq);
+
 		/* Update hwcur depending on where we stopped. */
 		kring->nr_hwcur = nm_i; /* note we migth break early */
-
-		/* No more free TX slots? Ask the hypervisor for notifications,
-		 * possibly only when a considerable amount of work has been
-		 * done.
-		 */
-		ND(3,"sent %d packets, hwcur %d", n, nm_i);
-		virtqueue_disable_intr(vq);
-		virtqueue_notify(vq);
-	} else {
-		if (ring->head != ring->tail)
-		    ND(5, "pure notify ? head %d tail %d nused %d %d",
-			ring->head, ring->tail, virtqueue_nused(vq),
-			(virtqueue_dump(vq), 1));
-		virtqueue_notify(vq);
-		if (interrupts) {
-			virtqueue_enable_intr(vq); // like postpone with 0
-		}
 	}
 
-
         /* Free used slots. We only consider our own used buffers, recognized
-	 * by the token we passed to virtqueue_add_outbuf.
+	 * by the token we passed to virtqueue_enqueue.
 	 */
         n = 0;
         for (;;) {
-                struct vtnet_tx_header *txhdr = virtqueue_dequeue(vq, NULL);
-                if (txhdr == NULL)
+                void *token = virtqueue_dequeue(vq, NULL);
+                if (token == NULL)
                         break;
-                if (likely(txhdr == (void *)txq)) {
-                        n++;
-			if (virtqueue_nused(vq) < 32) { // XXX slow release
-				break;
-			}
-		} else { /* leftover from previous transmission */
-			m_freem(txhdr->vth_mbuf);
-			uma_zfree(vtnet_tx_header_zone, txhdr);
-		}
+		if (unlikely(token != (void *)txq))
+			nm_prerr("BUG: token mismatch!!\n");
+		else
+			n++;
         }
-	if (n) {
+	if (n > 0) {
 		kring->nr_hwtail += n;
 		if (kring->nr_hwtail > lim)
 			kring->nr_hwtail -= lim + 1;
 	}
-	if (nm_i != kring->nr_hwtail /* && vtnet_txq_below_threshold(txq) == 0*/) {
-		ND(3, "disable intr, hwcur %d", nm_i);
-		virtqueue_disable_intr(vq);
-	} else if (interrupts) {
-		ND(3, "enable intr, hwcur %d", nm_i);
-		virtqueue_postpone_intr(vq, VQ_POSTPONE_SHORT);
-	}
+
+	if (interrupts && virtqueue_nfree(vq) < 32)
+		virtqueue_postpone_intr(vq, VQ_POSTPONE_LONG);
 
         return 0;
 }
