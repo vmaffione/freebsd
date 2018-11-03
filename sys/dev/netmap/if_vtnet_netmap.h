@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Vincenzo Maffione, Luigi Rizzo. All rights reserved.
+ * Copyright (C) 2014-2018 Vincenzo Maffione, Luigi Rizzo.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,48 +33,78 @@
 #include <vm/pmap.h>    /* vtophys ? */
 #include <dev/netmap/netmap_kern.h>
 
+static int vtnet_refill_rxq(struct netmap_kring *kring, u_int nm_i, u_int head);
 
-/* Free all the unused buffer in all the RX virtqueues.
- * This function is called when entering and exiting netmap mode.
- * - buffers queued by the virtio driver return skbuf/mbuf pointer
- *   and need to be freed;
- * - buffers queued by netmap return the txq/rxq, and do not need work
+/*
+ * Return 1 if the queue identified by 't' and 'idx' is in netmap mode.
  */
-static void
-vtnet_netmap_free_bufs(struct vtnet_softc* sc)
+static int
+vtnet_netmap_queue_on(struct vtnet_softc *sc, enum txrx t, int idx)
 {
-	int i, nmb = 0, n = 0, last;
+	struct netmap_adapter *na = NA(sc->vtnet_ifp);
 
-	for (i = 0; i < sc->vtnet_max_vq_pairs; i++) {
-		struct vtnet_rxq *rxq = &sc->vtnet_rxqs[i];
-		struct virtqueue *vq;
-		struct mbuf *m;
-		struct vtnet_txq *txq = &sc->vtnet_txqs[i];
-                struct vtnet_tx_header *txhdr;
+	if (!nm_native_on(na))
+		return 0;
 
-		last = 0;
-		vq = rxq->vtnrx_vq;
-		while ((m = virtqueue_drain(vq, &last)) != NULL) {
-			n++;
-			if (m != (void *)rxq)
+	if (t == NR_RX)
+		return !!(idx < na->num_rx_rings &&
+			na->rx_rings[idx]->nr_mode == NKR_NETMAP_ON);
+
+	return !!(idx < na->num_tx_rings &&
+		na->tx_rings[idx]->nr_mode == NKR_NETMAP_ON);
+}
+
+static void
+vtnet_netmap_free_used(struct virtqueue *vq, int onoff, enum txrx t, int idx)
+{
+	void *cookie;
+	int deq = 0;
+
+	while ((cookie = virtqueue_dequeue(vq, NULL)) != NULL) {
+		if (!onoff) {
+			/* We are leaving netmap mode, so these are netmap
+			 * buffers, and there is nothing to do. */
+		} else {
+			struct mbuf *m;
+
+			/* We are entering netmap mode, so these are mbufs
+			 * that we need to free. */
+			if (t == NR_TX) {
+				struct vtnet_tx_header *txhdr = cookie;
+				m = txhdr->vth_mbuf;
 				m_freem(m);
-			else
-				nmb++;
-		}
-
-		last = 0;
-		vq = txq->vtntx_vq;
-		while ((txhdr = virtqueue_drain(vq, &last)) != NULL) {
-			n++;
-			if (txhdr != (void *)txq) {
-				m_freem(txhdr->vth_mbuf);
 				uma_zfree(vtnet_tx_header_zone, txhdr);
-			} else
-				nmb++;
+			} else {
+				m = cookie;
+				m_freem(m);
+			}
 		}
+		deq++;
 	}
-	D("freed %d mbufs, %d netmap bufs on %d queues",
-		n - nmb, nmb, i);
+
+	if (deq)
+		nm_prinf("%d sgs dequeued from %s-%d (onoff=%d)\n",
+			 deq, nm_txrx2str(t), idx, onoff);
+}
+
+static void
+vtnet_netmap_free_unused(struct virtqueue *vq, int onoff, enum txrx t, int idx)
+{
+	void *cookie;
+	int last = 0;
+	int deq = 0;
+
+	KASSERT(onoff == 0, ("This should not be called when "
+				"entering netmap mode"));
+
+	while ((cookie = virtqueue_drain(vq, &last)) != NULL) {
+		(void) cookie;
+		deq++;
+	}
+
+	if (deq)
+		nm_prinf("%d sgs detached from %s-%d (onoff=%d)\n",
+			 deq, nm_txrx2str(t), idx, onoff);
 }
 
 /* Register and unregister. */
@@ -83,22 +113,133 @@ vtnet_netmap_reg(struct netmap_adapter *na, int onoff)
 {
         struct ifnet *ifp = na->ifp;
 	struct vtnet_softc *sc = ifp->if_softc;
+	enum txrx t;
+	int i;
 
-	VTNET_CORE_LOCK(sc);
-	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
-	/* enable or disable flags and callbacks in na and ifp */
 	if (onoff) {
+		/* Enable netmap mode before draining and detaching OS
+		 * buffers, to prevent the OS to transmit packets
+		 * while we are doing that. */
 		nm_set_native_flags(na);
+
+		for_rx_tx(t) {
+			/* Hardware rings. */
+			for (i = 0; i < nma_get_nrings(na, t); i++) {
+				struct netmap_kring *kring = NMR(na, t)[i];
+				struct virtqueue *vq;
+
+				if (!nm_kring_pending_on(kring))
+					continue;
+
+				if (t == NR_TX) {
+					struct vtnet_txq *txq = &sc->vtnet_txqs[i];
+
+					/* Stop any pending tasks and disable
+					 * watchdog. */
+					/* TODO taskqueue_drain_all ? */
+					taskqueue_drain(txq->vtntx_tq,
+							&txq->vtntx_intrtask);
+#ifndef VTNET_LEGACY_TX
+					taskqueue_drain(txq->vtntx_tq,
+							&txq->vtntx_defrtask);
+#endif
+					VTNET_TXQ_LOCK(txq);
+					txq->vtntx_watchdog = 0;
+
+					/* Get and free used OS buffers. */
+					vq = txq->vtntx_vq;
+					vtnet_netmap_free_used(vq, onoff, t, i);
+
+					/* Detach and free unused OS buffers. */
+					vtnet_txq_free_mbufs(txq);
+					VTNET_TXQ_UNLOCK(txq);
+				} else {
+					struct vtnet_rxq *rxq = &sc->vtnet_rxqs[i];
+
+					taskqueue_drain(rxq->vtnrx_tq,
+							&rxq->vtnrx_intrtask);
+					VTNET_RXQ_LOCK(rxq);
+					/* Get and free used OS buffers. */
+					vq = rxq->vtnrx_vq;
+					vtnet_netmap_free_used(vq, onoff, t, i);
+
+					/* Detach and free unused OS buffers. */
+					vtnet_rxq_free_mbufs(rxq);
+
+					/* Attach netmap buffers. */
+					vtnet_refill_rxq(kring, 0, na->num_rx_desc-1);
+					virtqueue_notify(vq);
+					VTNET_RXQ_UNLOCK(rxq);
+				}
+
+				kring->nr_mode = NKR_NETMAP_ON;
+			}
+
+			/* Host rings. */
+			for (i = 0; i < nma_get_host_nrings(na, t); i++) {
+				struct netmap_kring *kring =
+					NMR(na, t)[nma_get_nrings(na, t) + i];
+
+				if (nm_kring_pending_on(kring)) {
+					kring->nr_mode = NKR_NETMAP_ON;
+				}
+			}
+		}
 	} else {
+		for_rx_tx(t) {
+			/* Hardware rings. */
+			for (i = 0; i < nma_get_nrings(na, t); i++) {
+				struct netmap_kring *kring = NMR(na, t)[i];
+				struct virtqueue *vq;
+
+				if (!nm_kring_pending_off(kring))
+					continue;
+
+				if (t == NR_TX) {
+					struct vtnet_txq *txq = &sc->vtnet_txqs[i];
+
+					VTNET_TXQ_LOCK(txq);
+					/* Get used netmap buffers. */
+					vq = txq->vtntx_vq;
+					vtnet_netmap_free_used(vq, onoff, t, i);
+
+					/* Detach and free any unused netmap buffers. */
+					vtnet_netmap_free_unused(vq, onoff, t, i);
+					VTNET_TXQ_UNLOCK(txq);
+				} else {
+					struct vtnet_rxq *rxq = &sc->vtnet_rxqs[i];
+
+					VTNET_RXQ_LOCK(rxq);
+					/* Get used netmap buffers. */
+					vq = rxq->vtnrx_vq;
+					vtnet_netmap_free_used(vq, onoff, t, i);
+
+					/* Detach and free any unused netmap buffers. */
+					vtnet_netmap_free_unused(vq, onoff, t, i);
+					VTNET_RXQ_UNLOCK(rxq);
+				}
+
+				kring->nr_mode = NKR_NETMAP_OFF;
+			}
+
+			/* Host rings. */
+			for (i = 0; i < nma_get_host_nrings(na, t); i++) {
+				struct netmap_kring *kring =
+					NMR(na, t)[nma_get_nrings(na, t) + i];
+
+				if (nm_kring_pending_off(kring)) {
+					kring->nr_mode = NKR_NETMAP_OFF;
+				}
+			}
+		}
+
+		/* Disable netmap mode after netmap buffers have been drained
+		 * and detached, to prevent the OS to start transmitting while
+		 * we are doing that. */
 		nm_clear_native_flags(na);
 	}
-	/* drain queues so netmap and native drivers
-	 * do not interfere with each other
-	 */
-	vtnet_netmap_free_bufs(sc);
-        vtnet_init_locked(sc);       /* also enable intr */
-        VTNET_CORE_UNLOCK(sc);
-        return (ifp->if_drv_flags & IFF_DRV_RUNNING ? 0 : 1);
+
+	return 0;
 }
 
 
@@ -288,7 +429,7 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 				len -= sc->vtnet_hdr_size;
 				if (unlikely(len < 0)) {
 					RD(1, "Truncated virtio-net-header, "
-						"missing %d bytes", -len)
+						"missing %d bytes", -len);
 					len = 0;
 				}
 				ring->slot[nm_i].len = len;
@@ -353,41 +494,6 @@ vtnet_netmap_intr(struct netmap_adapter *na, int onoff)
 	}
 }
 
-/* Make RX virtqueues buffers pointing to netmap buffers. */
-static int
-vtnet_netmap_init_rx_buffers(struct vtnet_softc *sc)
-{
-	struct ifnet *ifp = sc->vtnet_ifp;
-	struct netmap_adapter* na = NA(ifp);
-	unsigned int r;
-
-	if (!nm_native_on(na))
-		return 0;
-	for (r = 0; r < na->num_rx_rings; r++) {
-                struct netmap_kring *kring = na->rx_rings[r];
-		struct vtnet_rxq *rxq = &sc->vtnet_rxqs[r];
-		struct virtqueue *vq = rxq->vtnrx_vq;
-	        struct netmap_slot* slot;
-		int err = 0;
-
-		slot = netmap_reset(na, NR_RX, r, 0);
-		if (!slot) {
-			D("strange, null netmap ring %d", r);
-			return 0;
-		}
-		/* Add up to na>-num_rx_desc-1 buffers to this RX virtqueue.
-		 * It's important to leave one virtqueue slot free, otherwise
-		 * we can run into ring->cur/ring->tail wraparounds.
-		 */
-		err = vtnet_refill_rxq(kring, 0, na->num_rx_desc-1);
-		if (err < 0)
-			return 0;
-		virtqueue_notify(vq);
-	}
-
-	return 1;
-}
-
 static void
 vtnet_netmap_attach(struct vtnet_softc *sc)
 {
@@ -396,6 +502,7 @@ vtnet_netmap_attach(struct vtnet_softc *sc)
 	bzero(&na, sizeof(na));
 
 	na.ifp = sc->vtnet_ifp;
+	na.na_flags = 0;
 	na.num_tx_desc = virtqueue_size(sc->vtnet_txqs[0].vtntx_vq);
 	na.num_rx_desc = virtqueue_size(sc->vtnet_rxqs[0].vtnrx_vq);
 	na.num_tx_rings = na.num_rx_rings = sc->vtnet_max_vq_pairs;
@@ -404,6 +511,8 @@ vtnet_netmap_attach(struct vtnet_softc *sc)
 	na.nm_txsync = vtnet_netmap_txsync;
 	na.nm_rxsync = vtnet_netmap_rxsync;
 	na.nm_intr = vtnet_netmap_intr;
+	na.nm_config = NULL; // TODO
+
 	netmap_attach(&na);
 
         nm_prinf("vtnet attached txq=%d, txd=%d rxq=%d, rxd=%d\n",
