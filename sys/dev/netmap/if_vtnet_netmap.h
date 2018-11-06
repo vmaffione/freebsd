@@ -253,7 +253,7 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
                 if (token == NULL)
                         break;
 		if (unlikely(token != (void *)txq))
-			nm_prerr("BUG: TX token mismatch!\n");
+			nm_prerr("BUG: TX token mismatch\n");
 		else
 			n++;
         }
@@ -387,7 +387,7 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
                         if (token == NULL)
                                 break;
 			if (unlikely(token != (void *)rxq)) {
-				nm_prerr("BUG: RX token mismatch!\n");
+				nm_prerr("BUG: RX token mismatch\n");
 			} else {
 				/* Skip the virtio-net header. */
 				len -= sc->vtnet_hdr_size;

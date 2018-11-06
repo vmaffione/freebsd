@@ -1792,7 +1792,7 @@ vtnet_rxq_eof(struct vtnet_rxq *rxq)
 
 #ifdef DEV_NETMAP
 	if (netmap_rx_irq(ifp, rxq->vtnrx_id, &len)) {
-		D("Should not be called");
+		nm_prerr("BUG: rxq_eof in netmap mode\n");
 		return 0;
 	}
 #endif /* DEV_NETMAP */
@@ -2503,7 +2503,7 @@ vtnet_txq_eof(struct vtnet_txq *txq)
 
 #ifdef DEV_NETMAP
 	if (netmap_tx_irq(txq->vtntx_sc->vtnet_ifp, txq->vtntx_id)) {
-		D("Should not be called");
+		nm_prerr("BUG: txq_eof in netmap mode\n");
 		return 0;
 	}
 #endif /* DEV_NETMAP */
@@ -3127,13 +3127,6 @@ vtnet_init(void *xsc)
 	struct vtnet_softc *sc;
 
 	sc = xsc;
-
-#ifdef DEV_NETMAP
-	if (!NA(sc->vtnet_ifp)) {
-		D("THIS SHOULD NOT HAPPEN!!!");
-		vtnet_netmap_attach(sc);
-	}
-#endif /* DEV_NETMAP */
 
 	VTNET_CORE_LOCK(sc);
 	vtnet_init_locked(sc);
