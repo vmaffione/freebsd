@@ -229,8 +229,10 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
                         err = virtqueue_enqueue(vq, /*cookie=*/txq, sg,
 						/*readable=*/sg->sg_nseg,
 						/*writeable=*/0);
-                        if (unlikely(err < 0)) {
-                                nm_prerr("virtqueue_enqueue() failed: %d\n", err);
+                        if (unlikely(err)) {
+				if (err != ENOSPC)
+					nm_prerr("virtqueue_enqueue(%s) failed: %d\n",
+							kring->name, err);
                                 break;
                         }
 
@@ -305,8 +307,10 @@ vtnet_netmap_kring_refill(struct netmap_kring *kring, u_int nm_i, u_int head)
 		/* writable for the host */
 		err = virtqueue_enqueue(vq, /*cookie=*/rxq, &sg,
 				/*readable=*/0, /*writeable=*/sg.sg_nseg);
-		if (err < 0) {
-			D("virtqueue_enqueue failed");
+		if (unlikely(err)) {
+			if (err != ENOSPC)
+				nm_prerr("virtqueue_enqueue(%s) failed: %d\n",
+					kring->name, err);
 			break;
 		}
 	}
