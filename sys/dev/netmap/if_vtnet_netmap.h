@@ -357,7 +357,6 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 	u_int ring_nr = kring->ring_id;
 	u_int nm_i;	/* index into the netmap ring */
 	// u_int nic_i;	/* index into the NIC ring */
-	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
 	int force_update = (flags & NAF_FORCE_READ) ||
@@ -369,27 +368,30 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 	struct vtnet_rxq *rxq = &sc->vtnet_rxqs[ring_nr];
 	struct virtqueue *vq = rxq->vtnrx_vq;
 
-	vtnet_rxq_disable_intr(rxq);
-
 	rmb();
 	/*
 	 * First part: import newly received packets.
 	 * Only accept our own buffers (matching the token). We should only get
-	 * matching buffers, because of vtnet_netmap_free_rx_unused_bufs()
-	 * and vtnet_netmap_init_buffers(). We may need to stop early to avoid
-	 * hwtail to overrun hwcur.
+	 * matching buffers. We may need to stop early to avoid hwtail to overrun
+	 * hwcur.
 	 */
 	if (netmap_no_pendintr || force_update) {
 		uint32_t hwtail_lim = nm_prev(kring->nr_hwcur, lim);
                 void *token;
 
+		vtnet_rxq_disable_intr(rxq);
+
                 nm_i = kring->nr_hwtail;
-                n = 0;
 		while (nm_i != hwtail_lim) {
 			int len;
                         token = virtqueue_dequeue(vq, &len);
-                        if (token == NULL)
+                        if (token == NULL) {
+				if (interrupts && vtnet_rxq_enable_intr(rxq)) {
+					vtnet_rxq_disable_intr(rxq);
+					continue;
+				}
                                 break;
+			}
 			if (unlikely(token != (void *)rxq)) {
 				nm_prerr("BUG: RX token mismatch\n");
 			} else {
@@ -403,7 +405,6 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 				ring->slot[nm_i].len = len;
 				ring->slot[nm_i].flags = 0;
 				nm_i = nm_next(nm_i, lim);
-				n++;
                         }
 		}
 		kring->nr_hwtail = nm_i;
@@ -423,13 +424,6 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 			return nm_j;
 		kring->nr_hwcur = nm_j;
 		virtqueue_notify(vq);
-	}
-
-	/* We have finished processing used RX buffers, so we have to tell
-	 * the hypervisor to make a call when more used RX buffers are ready.
-	 */
-	if (interrupts) {
-		vtnet_rxq_enable_intr(rxq);
 	}
 
         ND("[C] h %d c %d t %d hwcur %d hwtail %d",
