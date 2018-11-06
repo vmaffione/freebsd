@@ -1191,11 +1191,11 @@ vtnet_rxq_populate(struct vtnet_rxq *rxq)
 {
 	struct virtqueue *vq;
 	int nbufs, error;
+
 #ifdef DEV_NETMAP
-	if (vtnet_netmap_queue_on(rxq->vtnrx_sc, NR_RX, rxq->vtnrx_id)) {
-		D("Skipping ring %d", rxq->vtnrx_id);
-		return 0;
-	}
+	error = vtnet_netmap_rxq_populate(rxq);
+	if (error >= 0)
+		return (error);
 #endif  /* DEV_NETMAP */
 
 	vq = rxq->vtnrx_vq;
@@ -1226,20 +1226,27 @@ vtnet_rxq_free_mbufs(struct vtnet_rxq *rxq)
 {
 	struct virtqueue *vq;
 	struct mbuf *m;
+	int drained;
 	int last;
-
 #ifdef DEV_NETMAP
-	if (vtnet_netmap_queue_on(rxq->vtnrx_sc, NR_RX, rxq->vtnrx_id)) {
-		D("Skipping ring %d", rxq->vtnrx_id);
-		return;
-	}
-#endif /* DEV_NETMAP */
+	int netmap_bufs = vtnet_netmap_queue_on(rxq->vtnrx_sc, NR_RX,
+						rxq->vtnrx_id);
+#else  /* !DEV_NETMAP */
+	int netmap_bufs = 0;
+#endif /* !DEV_NETMAP */
 
 	vq = rxq->vtnrx_vq;
-	last = 0;
+	last = drained = 0;
 
-	while ((m = virtqueue_drain(vq, &last)) != NULL)
-		m_freem(m);
+	while ((m = virtqueue_drain(vq, &last)) != NULL) {
+		if (!netmap_bufs)
+			m_freem(m);
+		drained++;
+	}
+
+	if (drained)
+		nm_prinf("%d sgs detached from RX-%d (netmap=%d)\n",
+			 drained, rxq->vtnrx_id, netmap_bufs);
 
 	KASSERT(virtqueue_empty(vq),
 	    ("%s: mbufs remaining in rx queue %p", __func__, rxq));
@@ -1989,22 +1996,29 @@ vtnet_txq_free_mbufs(struct vtnet_txq *txq)
 {
 	struct virtqueue *vq;
 	struct vtnet_tx_header *txhdr;
+	int drained;
 	int last;
-
 #ifdef DEV_NETMAP
-	if (vtnet_netmap_queue_on(txq->vtntx_sc, NR_TX, txq->vtntx_id)) {
-		D("Skipping ring %d", txq->vtntx_id);
-		return;
-	}
-#endif /* DEV_NETMAP */
+	int netmap_bufs = vtnet_netmap_queue_on(txq->vtntx_sc, NR_TX,
+						txq->vtntx_id);
+#else  /* !DEV_NETMAP */
+	int netmap_bufs = 0;
+#endif /* !DEV_NETMAP */
 
 	vq = txq->vtntx_vq;
-	last = 0;
+	last = drained = 0;
 
 	while ((txhdr = virtqueue_drain(vq, &last)) != NULL) {
-		m_freem(txhdr->vth_mbuf);
-		uma_zfree(vtnet_tx_header_zone, txhdr);
+		if (!netmap_bufs) {
+			m_freem(txhdr->vth_mbuf);
+			uma_zfree(vtnet_tx_header_zone, txhdr);
+		}
+		drained++;
 	}
+
+	if (drained)
+		nm_prinf("%d sgs detached from TX-%d (netmap=%d)\n",
+			 drained, txq->vtntx_id, netmap_bufs);
 
 	KASSERT(virtqueue_empty(vq),
 	    ("%s: mbufs remaining in tx queue %p", __func__, txq));
