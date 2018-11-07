@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (C) 2018 Vincenzo Maffione
  * All rights reserved.
  *
@@ -25,8 +23,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-/* $FreeBSD$ */
 
 #if defined(__FreeBSD__)
 #include <sys/cdefs.h> /* prerequisite */
@@ -56,6 +52,7 @@
  */
 #include <net/netmap.h>
 #include <dev/netmap/netmap_kern.h>
+#include <dev/netmap/netmap_bdg.h>
 
 static int
 nmreq_register_from_legacy(struct nmreq *nmr, struct nmreq_header *hdr,
@@ -131,7 +128,7 @@ nmreq_from_legacy(struct nmreq *nmr, u_long ioctl_cmd)
 
 	/* First prepare the request header. */
 	hdr->nr_version = NETMAP_API; /* new API */
-	strncpy(hdr->nr_name, nmr->nr_name, sizeof(nmr->nr_name));
+	strlcpy(hdr->nr_name, nmr->nr_name, sizeof(nmr->nr_name));
 	hdr->nr_options = (uintptr_t)NULL;
 	hdr->nr_body = (uintptr_t)NULL;
 
@@ -242,7 +239,6 @@ nmreq_from_legacy(struct nmreq *nmr, u_long ioctl_cmd)
 			if (!req) { goto oom; }
 			hdr->nr_body = (uintptr_t)req;
 			hdr->nr_reqtype = NETMAP_REQ_PORT_INFO_GET;
-			req->nr_offset = nmr->nr_offset;
 			req->nr_memsize = nmr->nr_memsize;
 			req->nr_tx_slots = nmr->nr_tx_slots;
 			req->nr_rx_slots = nmr->nr_rx_slots;
@@ -300,7 +296,6 @@ nmreq_to_legacy(struct nmreq_header *hdr, struct nmreq *nmr)
 	case NETMAP_REQ_PORT_INFO_GET: {
 		struct nmreq_port_info_get *req =
 			(struct nmreq_port_info_get *)(uintptr_t)hdr->nr_body;
-		nmr->nr_offset = req->nr_offset;
 		nmr->nr_memsize = req->nr_memsize;
 		nmr->nr_tx_slots = req->nr_tx_slots;
 		nmr->nr_rx_slots = req->nr_rx_slots;
@@ -321,7 +316,7 @@ nmreq_to_legacy(struct nmreq_header *hdr, struct nmreq *nmr)
 	case NETMAP_REQ_VALE_LIST: {
 		struct nmreq_vale_list *req =
 			(struct nmreq_vale_list *)(uintptr_t)hdr->nr_body;
-		strncpy(nmr->nr_name, hdr->nr_name, sizeof(nmr->nr_name));
+		strlcpy(nmr->nr_name, hdr->nr_name, sizeof(nmr->nr_name));
 		nmr->nr_arg1 = req->nr_bridge_idx;
 		nmr->nr_arg2 = req->nr_port_idx;
 		break;

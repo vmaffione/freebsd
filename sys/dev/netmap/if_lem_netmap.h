@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (C) 2011-2014 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +25,7 @@
 
 
 /*
- * $FreeBSD$
+ * $FreeBSD: head/sys/dev/netmap/if_lem_netmap.h 271849 2014-09-19 03:51:26Z glebius $
  *
  * netmap support for: lem
  *

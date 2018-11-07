@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (C) 2014-2015 Vincenzo Maffione
  * All rights reserved.
  *
@@ -26,7 +24,7 @@
  * SUCH DAMAGE.
  */
 
-/* $FreeBSD$ */
+/* $FreeBSD: head/sys/dev/netmap/netmap_offloadings.c 261909 2014-02-15 04:53:04Z luigi $ */
 
 #if defined(__FreeBSD__)
 #include <sys/cdefs.h> /* prerequisite */

@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (C) 2013-2016 Vincenzo Maffione
  * Copyright (C) 2013-2016 Luigi Rizzo
  * All rights reserved.
@@ -67,7 +65,7 @@
 #ifdef __FreeBSD__
 
 #include <sys/cdefs.h> /* prerequisite */
-__FBSDID("$FreeBSD$");
+__FBSDID("$FreeBSD: head/sys/dev/netmap/netmap_generic.c 274353 2014-11-10 20:19:58Z luigi $");
 
 #include <sys/types.h>
 #include <sys/errno.h>
@@ -1115,7 +1113,7 @@ generic_netmap_attach(struct ifnet *ifp)
 		return ENOMEM;
 	}
 	na = (struct netmap_adapter *)gna;
-	strncpy(na->name, ifp->if_xname, sizeof(na->name));
+	strlcpy(na->name, ifp->if_xname, sizeof(na->name));
 	na->ifp = ifp;
 	na->num_tx_desc = num_tx_desc;
 	na->num_rx_desc = num_rx_desc;

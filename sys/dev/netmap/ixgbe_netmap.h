@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (C) 2011-2014 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +24,7 @@
  */
 
 /*
- * $FreeBSD$
+ * $FreeBSD: head/sys/dev/netmap/ixgbe_netmap.h 244514 2012-12-20 22:26:03Z luigi $
  *
  * netmap support for: ixgbe (both ix and ixv)
  *

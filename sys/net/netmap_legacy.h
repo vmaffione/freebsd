@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (C) 2011-2014 Matteo Landi, Luigi Rizzo. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,8 +28,6 @@
 #define _NET_NETMAP_LEGACY_H_
 
 /*
- * $FreeBSD$
- *
  * ioctl names and related fields
  *
  * NIOCTXSYNC, NIOCRXSYNC synchronize tx or rx queues,

@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
- *
+/*
  * Copyright (C) 2011-2014 Universita` di Pisa. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +24,7 @@
  */
 
 /*
- * $FreeBSD$
+ * $FreeBSD: head/sys/dev/netmap/if_igb_netmap.h 256200 2013-10-09 17:32:52Z jfv $
  *
  * Netmap support for igb, partly contributed by Ahmed Kooli
  * For details on netmap support please see ixgbe_netmap.h
