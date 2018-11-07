@@ -333,10 +333,11 @@ vtnet_netmap_rxq_populate(struct vtnet_rxq *rxq)
 			kring->nr_pending_mode == NKR_NETMAP_ON))
 		return -1;
 
-	error = vtnet_netmap_kring_refill(kring, 0, na->num_rx_desc-1);
+	/* Expose all the RX netmap buffers. Note that the number of
+	 * netmap slots in the RX ring matches the maximum number of
+	 * 2-elements sglist that the RX virtqueue can accommodate. */
+	error = vtnet_netmap_kring_refill(kring, 0, na->num_rx_desc);
 	virtqueue_notify(rxq->vtnrx_vq);
-
-	nm_prinf("%s: %d bufs populated\n", kring->name, error);
 
 	return error < 0 ? ENXIO : 0;
 }
