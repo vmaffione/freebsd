@@ -457,14 +457,60 @@ vtnet_netmap_intr(struct netmap_adapter *na, int onoff)
 }
 
 static int
+vtnet_netmap_tx_slots(struct vtnet_softc *sc)
+{
+	int div;
+
+	/* We need to prepend a virtio-net header to each netmap buffer to be
+	 * transmitted, therefore calling virtqueue_enqueue() passing sglist
+	 * with 2 elements.
+	 * TX virtqueues use indirect descriptors if the feature was negotiated
+	 * with the host, and if sc->vtnet_tx_nsegs > 1. With indirect
+	 * descriptors, a single virtio descriptor is sufficient to reference
+	 * each TX sglist. Without them, we need two separate virtio descriptors
+	 * for each TX sglist. We therefore compute the number of netmap TX
+	 * slots according to these assumptions.
+	 */
+	if ((sc->vtnet_flags & VTNET_FLAG_INDIRECT) && sc->vtnet_tx_nsegs > 1)
+		div = 1;
+	else
+		div = 2;
+
+	return virtqueue_size(sc->vtnet_txqs[0].vtntx_vq) / div;
+}
+
+static int
+vtnet_netmap_rx_slots(struct vtnet_softc *sc)
+{
+	int div;
+
+	/* We need to prepend a virtio-net header to each netmap buffer to be
+	 * received, therefore calling virtqueue_enqueue() passing sglist
+	 * with 2 elements.
+	 * RX virtqueues use indirect descriptors if the feature was negotiated
+	 * with the host, and if sc->vtnet_rx_nsegs > 1. With indirect
+	 * descriptors, a single virtio descriptor is sufficient to reference
+	 * each RX sglist. Without them, we need two separate virtio descriptors
+	 * for each RX sglist. We therefore compute the number of netmap RX
+	 * slots according to these assumptions.
+	 */
+	if ((sc->vtnet_flags & VTNET_FLAG_INDIRECT) && sc->vtnet_rx_nsegs > 1)
+		div = 1;
+	else
+		div = 2;
+
+	return virtqueue_size(sc->vtnet_rxqs[0].vtnrx_vq) / div;
+}
+
+static int
 vtnet_netmap_config(struct netmap_adapter *na, struct nm_config_info *info)
 {
 	struct vtnet_softc *sc = na->ifp->if_softc;
 
 	info->num_tx_rings = sc->vtnet_act_vq_pairs;
 	info->num_rx_rings = sc->vtnet_act_vq_pairs;
-	info->num_tx_descs = virtqueue_size(sc->vtnet_txqs[0].vtntx_vq)/2;
-	info->num_rx_descs = virtqueue_size(sc->vtnet_rxqs[0].vtnrx_vq)/2;
+	info->num_tx_descs = vtnet_netmap_tx_slots(sc);
+	info->num_rx_descs = vtnet_netmap_rx_slots(sc);
 	info->rx_buf_maxsize = NETMAP_BUF_SIZE(na);
 
 	return 0;
@@ -479,8 +525,8 @@ vtnet_netmap_attach(struct vtnet_softc *sc)
 
 	na.ifp = sc->vtnet_ifp;
 	na.na_flags = 0;
-	na.num_tx_desc = virtqueue_size(sc->vtnet_txqs[0].vtntx_vq)/2;
-	na.num_rx_desc = virtqueue_size(sc->vtnet_rxqs[0].vtnrx_vq)/2;
+	na.num_tx_desc = vtnet_netmap_tx_slots(sc);
+	na.num_rx_desc = vtnet_netmap_rx_slots(sc);
 	na.num_tx_rings = na.num_rx_rings = sc->vtnet_max_vq_pairs;
 	na.rx_buf_maxsize = 0;
 	na.nm_register = vtnet_netmap_reg;
