@@ -456,6 +456,20 @@ vtnet_netmap_intr(struct netmap_adapter *na, int onoff)
 	}
 }
 
+static int
+vtnet_netmap_config(struct netmap_adapter *na, struct nm_config_info *info)
+{
+	struct vtnet_softc *sc = na->ifp->if_softc;
+
+	info->num_tx_rings = sc->vtnet_act_vq_pairs;
+	info->num_rx_rings = sc->vtnet_act_vq_pairs;
+	info->num_tx_descs = virtqueue_size(sc->vtnet_txqs[0].vtntx_vq)/2;
+	info->num_rx_descs = virtqueue_size(sc->vtnet_rxqs[0].vtnrx_vq)/2;
+	info->rx_buf_maxsize = NETMAP_BUF_SIZE(na);
+
+	return 0;
+}
+
 static void
 vtnet_netmap_attach(struct vtnet_softc *sc)
 {
@@ -465,15 +479,15 @@ vtnet_netmap_attach(struct vtnet_softc *sc)
 
 	na.ifp = sc->vtnet_ifp;
 	na.na_flags = 0;
-	na.num_tx_desc = virtqueue_size(sc->vtnet_txqs[0].vtntx_vq);
-	na.num_rx_desc = virtqueue_size(sc->vtnet_rxqs[0].vtnrx_vq);
+	na.num_tx_desc = virtqueue_size(sc->vtnet_txqs[0].vtntx_vq)/2;
+	na.num_rx_desc = virtqueue_size(sc->vtnet_rxqs[0].vtnrx_vq)/2;
 	na.num_tx_rings = na.num_rx_rings = sc->vtnet_max_vq_pairs;
 	na.rx_buf_maxsize = 0;
 	na.nm_register = vtnet_netmap_reg;
 	na.nm_txsync = vtnet_netmap_txsync;
 	na.nm_rxsync = vtnet_netmap_rxsync;
 	na.nm_intr = vtnet_netmap_intr;
-	na.nm_config = NULL; // TODO
+	na.nm_config = vtnet_netmap_config;
 
 	netmap_attach(&na);
 
