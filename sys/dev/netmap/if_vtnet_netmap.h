@@ -187,8 +187,6 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int ring_nr = kring->ring_id;
 	u_int nm_i;	/* index into the netmap ring */
-	//u_int nic_i;	/* index into the NIC ring */
-	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
 
@@ -197,6 +195,7 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 	struct vtnet_txq *txq = &sc->vtnet_txqs[ring_nr];
 	struct virtqueue *vq = txq->vtntx_vq;
 	int interrupts = !(kring->nr_kflags & NKR_NOINTR);
+	u_int n;
 
 	/*
 	 * First part: process new packets to send.
@@ -207,8 +206,7 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 	if (nm_i != head) {	/* we have new packets to send */
 		struct sglist *sg = txq->vtntx_sg;
 
-		//nic_i = netmap_idx_k2n(kring, nm_i);
-		for (n = 0; nm_i != head; n++) {
+		for (; nm_i != head; nm_i = nm_next(nm_i, lim)) {
 			/* we use an empty header here */
 			struct netmap_slot *slot = &ring->slot[nm_i];
 			u_int len = slot->len;
@@ -223,7 +221,6 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 			 * and kick the hypervisor (if necessary).
 			 */
 			sglist_reset(sg); // cheap
-			// TODO cache physical address of vtntx_shrhdr
 			err = sglist_append(sg, &txq->vtntx_shrhdr, sc->vtnet_hdr_size);
 			err = sglist_append_phys(sg, paddr, len);
                         err = virtqueue_enqueue(vq, /*cookie=*/txq, sg,
@@ -235,9 +232,6 @@ vtnet_netmap_txsync(struct netmap_kring *kring, int flags)
 							kring->name, err);
                                 break;
                         }
-
-			nm_i = nm_next(nm_i, lim);
-			//nic_i = nm_next(nic_i, lim);
 		}
 
 		virtqueue_notify(vq);
@@ -356,7 +350,6 @@ vtnet_netmap_rxsync(struct netmap_kring *kring, int flags)
 	struct netmap_ring *ring = kring->ring;
 	u_int ring_nr = kring->ring_id;
 	u_int nm_i;	/* index into the netmap ring */
-	// u_int nic_i;	/* index into the NIC ring */
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
 	int force_update = (flags & NAF_FORCE_READ) ||
