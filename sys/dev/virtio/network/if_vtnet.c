@@ -1226,7 +1226,6 @@ vtnet_rxq_free_mbufs(struct vtnet_rxq *rxq)
 {
 	struct virtqueue *vq;
 	struct mbuf *m;
-	int drained;
 	int last;
 #ifdef DEV_NETMAP
 	int netmap_bufs = vtnet_netmap_queue_on(rxq->vtnrx_sc, NR_RX,
@@ -1236,17 +1235,12 @@ vtnet_rxq_free_mbufs(struct vtnet_rxq *rxq)
 #endif /* !DEV_NETMAP */
 
 	vq = rxq->vtnrx_vq;
-	last = drained = 0;
+	last = 0;
 
 	while ((m = virtqueue_drain(vq, &last)) != NULL) {
 		if (!netmap_bufs)
 			m_freem(m);
-		drained++;
 	}
-
-	if (drained)
-		nm_prinf("%d sgs detached from RX-%d (netmap=%d)\n",
-			 drained, rxq->vtnrx_id, netmap_bufs);
 
 	KASSERT(virtqueue_empty(vq),
 	    ("%s: mbufs remaining in rx queue %p", __func__, rxq));
@@ -1790,13 +1784,6 @@ vtnet_rxq_eof(struct vtnet_rxq *rxq)
 	deq = 0;
 	count = sc->vtnet_rx_process_limit;
 
-#ifdef DEV_NETMAP
-	if (netmap_rx_irq(ifp, rxq->vtnrx_id, &len)) {
-		nm_prerr("BUG: rxq_eof in netmap mode\n");
-		return 0;
-	}
-#endif /* DEV_NETMAP */
-
 	VTNET_RXQ_LOCK_ASSERT(rxq);
 
 	while (count-- > 0) {
@@ -1893,7 +1880,7 @@ vtnet_rx_vq_intr(void *xrxq)
 	}
 
 #ifdef DEV_NETMAP
-	if (netmap_rx_irq(ifp, rxq->vtnrx_id, &more))
+	if (netmap_rx_irq(ifp, rxq->vtnrx_id, &more) != NM_IRQ_PASS)
 		return;
 #endif /* DEV_NETMAP */
 
@@ -1996,7 +1983,6 @@ vtnet_txq_free_mbufs(struct vtnet_txq *txq)
 {
 	struct virtqueue *vq;
 	struct vtnet_tx_header *txhdr;
-	int drained;
 	int last;
 #ifdef DEV_NETMAP
 	int netmap_bufs = vtnet_netmap_queue_on(txq->vtntx_sc, NR_TX,
@@ -2006,19 +1992,14 @@ vtnet_txq_free_mbufs(struct vtnet_txq *txq)
 #endif /* !DEV_NETMAP */
 
 	vq = txq->vtntx_vq;
-	last = drained = 0;
+	last = 0;
 
 	while ((txhdr = virtqueue_drain(vq, &last)) != NULL) {
 		if (!netmap_bufs) {
 			m_freem(txhdr->vth_mbuf);
 			uma_zfree(vtnet_tx_header_zone, txhdr);
 		}
-		drained++;
 	}
-
-	if (drained)
-		nm_prinf("%d sgs detached from TX-%d (netmap=%d)\n",
-			 drained, txq->vtntx_id, netmap_bufs);
 
 	KASSERT(virtqueue_empty(vq),
 	    ("%s: mbufs remaining in tx queue %p", __func__, txq));
@@ -2501,13 +2482,6 @@ vtnet_txq_eof(struct vtnet_txq *txq)
 	struct mbuf *m;
 	int deq;
 
-#ifdef DEV_NETMAP
-	if (netmap_tx_irq(txq->vtntx_sc->vtnet_ifp, txq->vtntx_id)) {
-		nm_prerr("BUG: txq_eof in netmap mode\n");
-		return 0;
-	}
-#endif /* DEV_NETMAP */
-
 	vq = txq->vtntx_vq;
 	deq = 0;
 	VTNET_TXQ_LOCK_ASSERT(txq);
@@ -2554,7 +2528,7 @@ vtnet_tx_vq_intr(void *xtxq)
 	}
 
 #ifdef DEV_NETMAP
-	if (netmap_tx_irq(ifp, txq->vtntx_id))
+	if (netmap_tx_irq(ifp, txq->vtntx_id) != NM_IRQ_PASS)
 		return;
 #endif /* DEV_NETMAP */
 
